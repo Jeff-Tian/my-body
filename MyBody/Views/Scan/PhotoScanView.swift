@@ -62,16 +62,47 @@ struct PhotoScanView: View {
             Spacer()
 
             if viewModel.isScanning {
-                ProgressView(value: viewModel.scanProgress) {
+                VStack(spacing: 12) {
                     Text("正在扫描相册...")
                         .font(.headline)
-                }
-                .progressViewStyle(.linear)
-                .padding(.horizontal, 40)
 
-                Text("\(Int(viewModel.scanProgress * 100))%")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                    if viewModel.totalCount > 0 {
+                        Text("共 \(viewModel.totalCount) 张照片")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+
+                        ProgressView(value: viewModel.scanProgress)
+                            .progressViewStyle(.linear)
+                            .padding(.horizontal, 40)
+
+                        HStack(spacing: 4) {
+                            Text("\(viewModel.processedCount) / \(viewModel.totalCount)")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Text("·")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Text("\(Int(viewModel.scanProgress * 100))%")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+
+                        if !viewModel.stageMessage.isEmpty {
+                            Text(viewModel.stageMessage)
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                                .multilineTextAlignment(.center)
+                                .padding(.top, 4)
+                                .padding(.horizontal, 40)
+                        }
+                    } else {
+                        ProgressView()
+                            .scaleEffect(1.2)
+                        Text(viewModel.stageMessage.isEmpty ? "正在准备..." : viewModel.stageMessage)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
             } else if viewModel.scannedPhotos.isEmpty {
                 Image(systemName: "photo.on.rectangle.angled")
                     .font(.system(size: 60))

@@ -8,6 +8,9 @@ import Photos
 final class ScanViewModel {
     var isScanning = false
     var scanProgress: Double = 0
+    var totalCount: Int = 0
+    var processedCount: Int = 0
+    var stageMessage: String = ""
     var scannedPhotos: [ScannedPhoto] = []
     var showConfirmation = false
 
@@ -21,6 +24,7 @@ final class ScanViewModel {
     private let photoService = PhotoScanService()
     private let ocrService = OCRService()
     private var modelContext: ModelContext?
+    private var progressObserver: Task<Void, Never>?
 
     func setup(context: ModelContext) {
         self.modelContext = context
@@ -29,11 +33,30 @@ final class ScanViewModel {
     func startScan() async {
         isScanning = true
         scanProgress = 0
+        totalCount = 0
+        processedCount = 0
+        stageMessage = ""
         scannedPhotos = []
+
+        // Mirror photoService counts into this view model
+        progressObserver?.cancel()
+        progressObserver = Task { [weak self] in
+            while let self, !Task.isCancelled {
+                self.totalCount = self.photoService.totalCount
+                self.processedCount = self.photoService.processedCount
+                self.scanProgress = self.photoService.scanProgress
+                self.stageMessage = self.photoService.stageMessage
+                try? await Task.sleep(nanoseconds: 100_000_000)  // 0.1s
+            }
+        }
 
         await photoService.scanPhotoLibrary()
 
+        progressObserver?.cancel()
         scannedPhotos = photoService.scannedPhotos
+        totalCount = photoService.totalCount
+        processedCount = photoService.processedCount
+        stageMessage = photoService.stageMessage
         scanProgress = 1.0
         isScanning = false
 

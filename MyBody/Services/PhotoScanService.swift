@@ -14,6 +14,10 @@ final class PhotoScanService: ObservableObject {
     @Published var scannedPhotos: [ScannedPhoto] = []
     @Published var isScanning = false
     @Published var scanProgress: Double = 0
+    @Published var totalCount: Int = 0
+    @Published var processedCount: Int = 0
+    @Published var detectedCount: Int = 0
+    @Published var stageMessage: String = ""
 
     private let ocrService = OCRService()
 
@@ -51,22 +55,46 @@ final class PhotoScanService: ObservableObject {
     }
 
     func scanPhotoLibrary() async {
-        guard await requestAuthorization() else { return }
-
-        isScanning = true
-        scanProgress = 0
-        scannedPhotos = []
-
-        let fetchOptions = PHFetchOptions()
-        fetchOptions.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
-        fetchOptions.predicate = NSPredicate(format: "mediaType == %d", PHAssetMediaType.image.rawValue)
-        let assets = PHAsset.fetchAssets(with: fetchOptions)
-
-        let total = assets.count
-        guard total > 0 else {
+        stageMessage = "正在请求相册权限..."
+        guard await requestAuthorization() else {
+            stageMessage = "未获得相册访问权限"
             isScanning = false
             return
         }
+
+        isScanning = true
+        scanProgress = 0
+        processedCount = 0
+        detectedCount = 0
+        totalCount = 0
+        scannedPhotos = []
+        stageMessage = "正在读取相册..."
+
+        let range = ScanRange.current
+        let fetchOptions = PHFetchOptions()
+        fetchOptions.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
+
+        if let startDate = range.startDate {
+            fetchOptions.predicate = NSPredicate(
+                format: "mediaType == %d AND creationDate >= %@",
+                PHAssetMediaType.image.rawValue,
+                startDate as NSDate
+            )
+        } else {
+            fetchOptions.predicate = NSPredicate(format: "mediaType == %d", PHAssetMediaType.image.rawValue)
+        }
+
+        let assets = PHAsset.fetchAssets(with: fetchOptions)
+
+        let total = assets.count
+        totalCount = total
+        guard total > 0 else {
+            stageMessage = "相册中没有符合条件的照片"
+            isScanning = false
+            return
+        }
+
+        stageMessage = "正在准备扫描..."
 
         // Collect assets into an array (PHFetchResult is not Sendable)
         var assetList: [PHAsset] = []
@@ -86,9 +114,20 @@ final class PhotoScanService: ObservableObject {
             for (i, asset) in assetList.enumerated() {
                 if Task.isCancelled { break }
 
+                await MainActor.run {
+                    self.stageMessage = "正在读取第 \(i + 1) / \(total) 张照片..."
+                }
+
                 guard let image = self.requestImageSync(for: asset, targetSize: scanSize) else {
-                    await MainActor.run { self.scanProgress = Double(i + 1) / Double(total) }
+                    await MainActor.run {
+                        self.processedCount = i + 1
+                        self.scanProgress = Double(i + 1) / Double(total)
+                    }
                     continue
+                }
+
+                await MainActor.run {
+                    self.stageMessage = "正在识别第 \(i + 1) / \(total) 张照片..."
                 }
 
                 if ocr.isInBodyReport(image) {
@@ -98,15 +137,23 @@ final class PhotoScanService: ObservableObject {
                         contentMode: .aspectFill
                     )
                     results.append(ScannedPhoto(asset: asset, thumbnail: thumb))
+                    let detectedSoFar = results.count
+                    await MainActor.run {
+                        self.detectedCount = detectedSoFar
+                    }
                 }
 
-                await MainActor.run { self.scanProgress = Double(i + 1) / Double(total) }
+                await MainActor.run {
+                    self.processedCount = i + 1
+                    self.scanProgress = Double(i + 1) / Double(total)
+                }
             }
 
             return results
         }.value
 
         scannedPhotos = detected
+        stageMessage = detected.isEmpty ? "扫描完成，未发现报告" : "扫描完成"
         isScanning = false
     }
 

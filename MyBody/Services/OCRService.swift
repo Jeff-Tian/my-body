@@ -72,6 +72,12 @@ final class OCRService: Sendable {
         request.recognitionLevel = .accurate
         request.recognitionLanguages = ["zh-Hans", "en-US"]
         request.usesLanguageCorrection = true
+        #if targetEnvironment(simulator)
+        // Workaround: iOS Simulator 的 Metal API Validation 会对 Vision 内部
+        // 使用的 shared-storage Metal 纹理调用 synchronizeResource 触发断言崩溃。
+        // 在模拟器上强制 Vision 走 CPU 路径，真机不受影响。
+        request.usesCPUOnly = true
+        #endif
 
         let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
         try handler.perform([request])
