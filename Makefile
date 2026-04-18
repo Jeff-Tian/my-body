@@ -34,7 +34,51 @@ gen:
 	@if ! command -v xcodegen >/dev/null 2>&1; then \
 		echo "未检测到 xcodegen，安装：brew install xcodegen"; exit 70; \
 	fi
-	@xcodegen generate
+	@TEAM="$${DEVELOPMENT_TEAM:-$$( $(MAKE) -s resolve-team )}"; \
+	if [ -n "$$TEAM" ]; then \
+		echo "[gen] 使用 DEVELOPMENT_TEAM=$$TEAM"; \
+	else \
+		echo "[gen] ⚠️  未检测到开发者 Team，字段将留空（模拟器构建不受影响）"; \
+	fi; \
+	DEVELOPMENT_TEAM=$$TEAM xcodegen generate
+	@# 禁用 Metal API Validation / Shader Validation，避免在 “Designed for iPhone on Mac”
+	@# 上运行时 Vision 内部 shared-storage 纹理触发 synchronizeResource 断言崩溃。
+	@SCHEME_FILE="$(PROJECT)/xcshareddata/xcschemes/$(SCHEME).xcscheme"; \
+	if [ -f "$$SCHEME_FILE" ]; then \
+		if ! grep -q 'enableGPUValidationMode' "$$SCHEME_FILE"; then \
+			/usr/bin/sed -i '' 's|<LaunchAction$$|<LaunchAction\'$$'\n''      enableGPUValidationMode = "1"\'$$'\n''      enableGPUShaderValidationMode = "1"|' "$$SCHEME_FILE"; \
+			echo "[gen] 已在 scheme 中禁用 Metal API / Shader Validation"; \
+		fi; \
+	fi
+
+## resolve-team: 输出要使用的 DEVELOPMENT_TEAM（内部使用）
+##   优先级：
+##     1. 环境变量 $$DEVELOPMENT_TEAM
+##     2. Xcode IDEProvisioningTeams 中 isFreeProvisioningTeam=false 的第一个付费 Team
+##     3. Xcode IDEProvisioningTeams 中第一个 Team（Personal 也行）
+##     4. Apple Development 证书 OU 字段
+.PHONY: resolve-team
+resolve-team:
+	@if [ -n "$$DEVELOPMENT_TEAM" ]; then echo "$$DEVELOPMENT_TEAM"; exit 0; fi; \
+	PLIST=$$HOME/Library/Preferences/com.apple.dt.Xcode.plist; \
+	if [ -f "$$PLIST" ]; then \
+		TEAM=$$(plutil -p "$$PLIST" 2>/dev/null | awk ' \
+			/"IDEProvisioningTeams"/ { in_ipt=1 } \
+			in_ipt && /"isFreeProvisioningTeam" => false/ { paid=1 } \
+			in_ipt && /"isFreeProvisioningTeam" => true/ { paid=0 } \
+			in_ipt && paid && /"teamID" =>/ { gsub(/[",]/,""); print $$3; exit } \
+		'); \
+		if [ -z "$$TEAM" ]; then \
+			TEAM=$$(plutil -p "$$PLIST" 2>/dev/null | awk ' \
+				/"IDEProvisioningTeams"/ { in_ipt=1 } \
+				in_ipt && /"teamID" =>/ { gsub(/[",]/,""); print $$3; exit } \
+			'); \
+		fi; \
+	fi; \
+	if [ -z "$$TEAM" ]; then \
+		TEAM=$$(security find-certificate -c 'Apple Development' -p 2>/dev/null | openssl x509 -noout -subject 2>/dev/null | sed -nE 's/.*OU=([A-Z0-9]{10}).*/\1/p' | head -1); \
+	fi; \
+	echo "$$TEAM"
 
 ## build: 为模拟器构建应用
 .PHONY: build
@@ -75,6 +119,41 @@ run: gen
 .PHONY: logs
 logs:
 	@xcrun simctl spawn booted log stream --level=debug --predicate 'processImagePath CONTAINS "$(SCHEME)"'
+
+## run-mac: 以 “My Mac (Designed for iPhone)” 模式构建，并通过 Xcode 启动
+##   说明：原生 iOS .app 无法通过 `open` 直接在 Mac 上启动（macOS LaunchServices
+##   只认 Mac 格式），但 Xcode 能借助内部 installd 机制运行。因此该目标会：
+##     1. 用正确的 destination 预构建，确保 Team/签名无误
+##     2. 打开 Xcode 并触发 Run（Team 已由 `make gen` 写入 pbxproj，不再弹窗）
+.PHONY: run-mac
+run-mac: gen
+	@set -euo pipefail; \
+	TEAM=$$( $(MAKE) -s resolve-team ); \
+	if [ -z "$$TEAM" ]; then \
+		echo "[run-mac] ❌ 未找到开发者 Team。请先在 Xcode 登录 Apple ID，或运行：export DEVELOPMENT_TEAM=XXXXXXXXXX"; exit 1; \
+	fi; \
+	echo "[run-mac] 使用 DEVELOPMENT_TEAM=$$TEAM"; \
+	DEST='platform=macOS,arch=arm64,variant=Designed for iPad'; \
+	echo "[run-mac] 预构建 (destination: Designed for iPhone on Mac)"; \
+	xcodebuild -scheme $(SCHEME) -project $(PROJECT) -configuration $(CONFIG) \
+		-destination "$$DEST" \
+		-derivedDataPath $(DERIVED_DATA) \
+		-allowProvisioningUpdates \
+		DEVELOPMENT_TEAM=$$TEAM \
+		CODE_SIGN_STYLE=Automatic \
+		build $(LOG_PIPE); \
+	echo "[run-mac] ✅ 构建通过。打开 Xcode 并触发 Run…"; \
+	open -a Xcode $(PROJECT); \
+	sleep 2; \
+	osascript -e 'tell application "Xcode" to activate' \
+		-e 'tell application "System Events" to tell process "Xcode" to keystroke "r" using command down' \
+		|| echo "[run-mac] ℹ️  自动按 Cmd+R 失败（可能需要辅助功能权限），请手动点 Run。"
+
+## xcode: 生成工程并在 Xcode 中打开（Team 已自动写入）
+.PHONY: xcode
+xcode: gen
+	@open -a Xcode $(PROJECT); \
+	echo "[xcode] ✅ 已在 Xcode 中打开 $(PROJECT)。Team 已预填，直接 Cmd+R 即可。"
 
 ## stop: 终止模拟器中的应用
 .PHONY: stop

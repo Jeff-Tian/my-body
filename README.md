@@ -35,8 +35,11 @@ brew install xcbeautify   # 可选，用于美化构建日志
 | 命令 | 说明 |
 |---|---|
 | `make run` | 生成工程 → 构建 → 启动模拟器 → 安装 → 运行 |
-| `make build` | 仅构建 |
-| `make gen` | 仅运行 xcodegen 生成 Xcode 工程 |
+| `make run-mac` | 以 "My Mac (Designed for iPhone)" 模式构建，并通过 Xcode 启动（Team/Metal Validation 已自动处理）|
+| `make xcode` | 生成工程并在 Xcode 中打开（Team 已预填，直接 Cmd+R） |
+| `make build` | 仅构建（模拟器） |
+| `make gen` | 仅运行 xcodegen 生成 Xcode 工程（自动注入 `DEVELOPMENT_TEAM` + 关闭 Metal API / Shader Validation） |
+| `make resolve-team` | 打印自动解析出的 Apple Developer Team ID（调试用） |
 | `make logs` | 实时跟踪 App 日志 |
 | `make stop` | 终止模拟器中的 App |
 | `make clean` | 清理 `build/` 目录 |
@@ -47,7 +50,15 @@ brew install xcbeautify   # 可选，用于美化构建日志
 ```bash
 make run SIMULATOR_DEVICE="iPhone 15 Pro"
 make run CONFIG=Release
+
+# 如果自动解析的 Team ID 不对，可手动指定：
+DEVELOPMENT_TEAM=XXXXXXXXXX make gen
 ```
+
+### Team 与 Metal Validation 自动化
+
+- **Team 自动注入**：`make gen` 会从 Xcode 的 `IDEProvisioningTeams` 偏好里自动挑选付费 Team（跳过 `Personal Team`），写进 `project.pbxproj`。再也不会出现 Xcode GUI 里 Team 为 `None` 导致签名失败的问题。
+- **Metal API / Shader Validation**：生成 scheme 后自动改写 `<LaunchAction>`，把两项 Metal Validation 都置为 Disabled（避免在 "Designed for iPhone on Mac" 下 Vision 的 shared-storage 纹理触发 `synchronizeResource` 断言崩溃）。
 
 ## 项目结构
 
@@ -75,7 +86,7 @@ MyBody/
 - `project.yml` 是工程定义源，修改后执行 `make gen` 重新生成 `.xcodeproj`
 - Bundle ID：`brickverse.MyBody`
 - 最低部署版本：iOS 17.0
-- ⚠️ 不要在 "My Mac (Designed for iPhone)" 运行 — Mac Catalyst 模式下 Metal 验证会误报崩溃；请使用 iPhone 模拟器或真机
+- 在 "My Mac (Designed for iPhone)" 上运行，推荐使用 `make run-mac`；已自动关闭 Metal API / Shader Validation，避免 Vision 的模拟器/Mac 断言崩溃
 
 ## License
 

@@ -18,6 +18,7 @@ struct PhotoScanView: View {
                             if viewModel.currentParseIndex >= viewModel.selectedPhotos.count {
                                 dismiss()
                             } else {
+                                viewModel.isParsing = true
                                 Task { await viewModel.parseNextPhoto() }
                             }
                         },
@@ -26,6 +27,7 @@ struct PhotoScanView: View {
                             if viewModel.currentParseIndex >= viewModel.selectedPhotos.count {
                                 dismiss()
                             } else {
+                                viewModel.isParsing = true
                                 Task { await viewModel.parseNextPhoto() }
                             }
                         }
@@ -34,6 +36,7 @@ struct PhotoScanView: View {
                     ScanConfirmView(viewModel: viewModel) {
                         viewModel.showConfirmation = false
                         viewModel.currentParseIndex = 0
+                        viewModel.isParsing = true   // 立即显示 loading，避免等 Task 调度时闪白
                         Task { await viewModel.parseNextPhoto() }
                     }
                 } else {
@@ -124,15 +127,79 @@ struct PhotoScanView: View {
             }
 
             if viewModel.isParsing {
+                parsingView
+            } else if !viewModel.isScanning && !viewModel.scannedPhotos.isEmpty {
+                // 兜底：不扫描、有照片、又没在 parse（状态过渡或错误）—— 至少显示一个加载态
                 VStack(spacing: 12) {
                     ProgressView()
                         .scaleEffect(1.2)
-                    Text("正在识别报告...")
+                    Text("正在准备识别…")
+                        .font(.caption)
                         .foregroundColor(.secondary)
                 }
             }
 
             Spacer()
+        }
+    }
+
+    private var parsingView: some View {
+        let total = viewModel.selectedPhotos.count
+        let current = min(viewModel.currentParseIndex + 1, max(total, 1))
+        let progress = total > 0 ? Double(viewModel.currentParseIndex) / Double(total) : 0
+
+        return VStack(spacing: 16) {
+            // Thumbnail preview of the photo currently being OCR'd
+            ZStack {
+                RoundedRectangle(cornerRadius: 14)
+                    .fill(Color.gray.opacity(0.1))
+                    .frame(width: 180, height: 240)
+
+                if let thumb = viewModel.currentThumbnail {
+                    Image(uiImage: thumb)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: 180, height: 240)
+                        .clipShape(RoundedRectangle(cornerRadius: 14))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 14)
+                                .stroke(Color.appGreen.opacity(0.6), lineWidth: 2)
+                        )
+                }
+
+                // Shimmer / activity indicator overlay
+                RoundedRectangle(cornerRadius: 14)
+                    .fill(Color.black.opacity(0.25))
+                    .frame(width: 180, height: 240)
+
+                VStack(spacing: 8) {
+                    ProgressView()
+                        .progressViewStyle(.circular)
+                        .tint(.white)
+                        .scaleEffect(1.3)
+                    Text("识别中")
+                        .font(.caption)
+                        .foregroundColor(.white)
+                }
+            }
+
+            Text("正在识别第 \(current) / \(total) 张")
+                .font(.headline)
+
+            ProgressView(value: progress)
+                .progressViewStyle(.linear)
+                .tint(.appGreen)
+                .padding(.horizontal, 40)
+
+            Text("\(Int(progress * 100))%")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            if !viewModel.parseStageMessage.isEmpty {
+                Label(viewModel.parseStageMessage, systemImage: "waveform")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
         }
     }
 }

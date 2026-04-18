@@ -17,9 +17,11 @@ final class ScanViewModel {
     var currentParseIndex = 0
     var parsedReport: OCRService.ParsedReport?
     var currentImage: UIImage?
+    var currentThumbnail: UIImage?
     var currentAsset: PHAsset?
     var isParsing = false
     var showParseResult = false
+    var parseStageMessage: String = ""
 
     private let photoService = PhotoScanService()
     private let ocrService = OCRService()
@@ -82,26 +84,45 @@ final class ScanViewModel {
         isParsing = true
         let photo = selected[currentParseIndex]
         currentAsset = photo.asset
+        currentThumbnail = photo.thumbnail
+        currentImage = nil
+        parsedReport = nil
+        parseStageMessage = "正在加载图片…"
 
-        if let image = await photoService.loadFullImage(for: photo.asset) {
-            currentImage = image
-            let ocr = ocrService
-            // Run OCR on background thread
-            let result: OCRService.ParsedReport = await Task.detached(priority: .userInitiated) {
-                do {
-                    return try ocr.parseReport(from: image)
-                } catch {
-                    var failed = OCRService.ParsedReport()
-                    failed.failedFields = Set(["all"])
-                    return failed
-                }
-            }.value
-            parsedReport = result
-            if parsedReport?.scanDate == nil {
-                parsedReport?.scanDate = photo.asset.creationDate
-            }
+        guard let image = await photoService.loadFullImage(for: photo.asset) else {
+            // 图片加载失败（常见于 Mac "Designed for iPhone" 或 iCloud 原图未下载）：
+            // 生成一份空报告让用户手动录入，避免白屏卡死。
+            var fallback = OCRService.ParsedReport()
+            fallback.scanDate = photo.asset.creationDate
+            fallback.failedFields = Set(["all"])
+            parsedReport = fallback
+            parseStageMessage = ""
+            isParsing = false
+            showParseResult = true
+            return
         }
 
+        currentImage = image
+        parseStageMessage = "正在识别文字…"
+        let ocr = ocrService
+        // Run OCR on background thread
+        let result: OCRService.ParsedReport = await Task.detached(priority: .userInitiated) {
+            do {
+                return try ocr.parseReport(from: image)
+            } catch {
+                var failed = OCRService.ParsedReport()
+                failed.failedFields = Set(["all"])
+                return failed
+            }
+        }.value
+        parseStageMessage = "正在解析字段…"
+        var finalReport = result
+        if finalReport.scanDate == nil {
+            finalReport.scanDate = photo.asset.creationDate
+        }
+        parsedReport = finalReport
+
+        parseStageMessage = ""
         isParsing = false
         showParseResult = true
     }
@@ -135,10 +156,12 @@ final class ScanViewModel {
         currentParseIndex = 0
         parsedReport = nil
         currentImage = nil
+        currentThumbnail = nil
         currentAsset = nil
         isParsing = false
         showParseResult = false
         showConfirmation = false
         scannedPhotos = []
+        parseStageMessage = ""
     }
 }
