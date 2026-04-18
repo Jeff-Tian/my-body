@@ -62,16 +62,20 @@ final class ScanViewModel {
 
         if let image = await photoService.loadFullImage(for: photo.asset) {
             currentImage = image
-            do {
-                parsedReport = try await ocrService.parseReport(from: image)
-                // Set date from asset if OCR failed
-                if parsedReport?.scanDate == nil {
-                    parsedReport?.scanDate = photo.asset.creationDate
+            let ocr = ocrService
+            // Run OCR on background thread
+            let result: OCRService.ParsedReport = await Task.detached(priority: .userInitiated) {
+                do {
+                    return try ocr.parseReport(from: image)
+                } catch {
+                    var failed = OCRService.ParsedReport()
+                    failed.failedFields = Set(["all"])
+                    return failed
                 }
-            } catch {
-                parsedReport = OCRService.ParsedReport()
+            }.value
+            parsedReport = result
+            if parsedReport?.scanDate == nil {
                 parsedReport?.scanDate = photo.asset.creationDate
-                parsedReport?.failedFields = Set(["all"])
             }
         }
 

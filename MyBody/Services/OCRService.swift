@@ -2,8 +2,7 @@ import Foundation
 import Vision
 import UIKit
 
-@MainActor
-final class OCRService {
+final class OCRService: Sendable {
 
     struct ParsedReport {
         var scanDate: Date?
@@ -64,45 +63,25 @@ final class OCRService {
         }
     }
 
-    func recognizeText(from image: UIImage) async throws -> [String] {
+    /// Perform OCR synchronously — no completion handler, no continuation.
+    /// VNRecognizeTextRequest.results is populated after perform() returns.
+    func recognizeText(from image: UIImage) throws -> [String] {
         guard let cgImage = image.cgImage else { return [] }
 
-        return try await withCheckedThrowingContinuation { continuation in
-            let lock = NSLock()
-            var hasResumed = false
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        request.recognitionLanguages = ["zh-Hans", "en-US"]
+        request.usesLanguageCorrection = true
 
-            func safeResume(with result: Result<[String], Error>) {
-                lock.lock()
-                defer { lock.unlock() }
-                guard !hasResumed else { return }
-                hasResumed = true
-                continuation.resume(with: result)
-            }
+        let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+        try handler.perform([request])
 
-            let request = VNRecognizeTextRequest { request, error in
-                if let error = error {
-                    safeResume(with: .failure(error))
-                    return
-                }
-                let results = request.results as? [VNRecognizedTextObservation] ?? []
-                let lines = results.compactMap { $0.topCandidates(1).first?.string }
-                safeResume(with: .success(lines))
-            }
-            request.recognitionLevel = .accurate
-            request.recognitionLanguages = ["zh-Hans", "en-US"]
-            request.usesLanguageCorrection = true
-
-            let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
-            do {
-                try handler.perform([request])
-            } catch {
-                safeResume(with: .failure(error))
-            }
-        }
+        let results = request.results ?? []
+        return results.compactMap { $0.topCandidates(1).first?.string }
     }
 
-    func parseReport(from image: UIImage) async throws -> ParsedReport {
-        let lines = try await recognizeText(from: image)
+    func parseReport(from image: UIImage) throws -> ParsedReport {
+        let lines = try recognizeText(from: image)
         return parseLines(lines)
     }
 
@@ -295,9 +274,9 @@ final class OCRService {
 
     // MARK: - InBody Report Detection
 
-    func isInBodyReport(_ image: UIImage) async -> Bool {
+    func isInBodyReport(_ image: UIImage) -> Bool {
         do {
-            let lines = try await recognizeText(from: image)
+            let lines = try recognizeText(from: image)
             let text = lines.joined(separator: " ").lowercased()
             let keywords = ["inbody", "人体成份分析", "人体成分分析", "bmi", "骨骼肌",
                           "体脂肪", "身体成分", "body composition"]

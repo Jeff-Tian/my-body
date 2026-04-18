@@ -2,10 +2,10 @@ import Foundation
 import Photos
 import UIKit
 
-struct ScannedPhoto: Identifiable {
+struct ScannedPhoto: Identifiable, Sendable {
     let id = UUID()
     let asset: PHAsset
-    var thumbnail: UIImage?
+    let thumbnail: UIImage?
     var isSelected: Bool = true
 }
 
@@ -25,37 +25,29 @@ final class PhotoScanService: ObservableObject {
         return newStatus == .authorized || newStatus == .limited
     }
 
-    /// Safely request a single image from PHImageManager.
-    /// PHImageManager.requestImage may call its result handler MORE THAN ONCE
-    /// (even with `.highQualityFormat`). We use NSLock to guarantee the
-    /// continuation is resumed exactly once, preventing SIGABRT.
-    private func requestImage(
+    /// Load image synchronously. isSynchronous=true guarantees the callback
+    /// fires exactly once before requestImage returns — no continuation needed.
+    private nonisolated func requestImageSync(
         for asset: PHAsset,
         targetSize: CGSize,
         contentMode: PHImageContentMode = .aspectFit
-    ) async -> UIImage? {
+    ) -> UIImage? {
         let options = PHImageRequestOptions()
         options.deliveryMode = .highQualityFormat
         options.resizeMode = .fast
+        options.isSynchronous = true
         options.isNetworkAccessAllowed = UserDefaults.standard.bool(forKey: "iCloudPhotoDownload")
 
-        return await withCheckedContinuation { continuation in
-            let lock = NSLock()
-            var hasResumed = false
-
-            PHImageManager.default().requestImage(
-                for: asset,
-                targetSize: targetSize,
-                contentMode: contentMode,
-                options: options
-            ) { image, _ in
-                lock.lock()
-                defer { lock.unlock() }
-                guard !hasResumed else { return }
-                hasResumed = true
-                continuation.resume(returning: image)
-            }
+        var result: UIImage?
+        PHImageManager.default().requestImage(
+            for: asset,
+            targetSize: targetSize,
+            contentMode: contentMode,
+            options: options
+        ) { image, _ in
+            result = image
         }
+        return result
     }
 
     func scanPhotoLibrary() async {
@@ -76,34 +68,51 @@ final class PhotoScanService: ObservableObject {
             return
         }
 
+        // Collect assets into an array (PHFetchResult is not Sendable)
+        var assetList: [PHAsset] = []
+        assetList.reserveCapacity(total)
+        for i in 0..<total {
+            assetList.append(assets[i])
+        }
+
         let scanSize = CGSize(width: 800, height: 800)
         let thumbSize = CGSize(width: 200, height: 200)
-        var detected: [ScannedPhoto] = []
+        let ocr = ocrService
 
-        for i in 0..<total {
-            // Support cancellation
-            if Task.isCancelled { break }
+        // Run ALL heavy work (image loading + OCR) on a background thread
+        let detected: [ScannedPhoto] = await Task.detached(priority: .userInitiated) {
+            var results: [ScannedPhoto] = []
 
-            let asset = assets[i]
+            for (i, asset) in assetList.enumerated() {
+                if Task.isCancelled { break }
 
-            guard let image = await requestImage(for: asset, targetSize: scanSize) else {
-                scanProgress = Double(i + 1) / Double(total)
-                continue
+                guard let image = self.requestImageSync(for: asset, targetSize: scanSize) else {
+                    await MainActor.run { self.scanProgress = Double(i + 1) / Double(total) }
+                    continue
+                }
+
+                if ocr.isInBodyReport(image) {
+                    let thumb = self.requestImageSync(
+                        for: asset,
+                        targetSize: thumbSize,
+                        contentMode: .aspectFill
+                    )
+                    results.append(ScannedPhoto(asset: asset, thumbnail: thumb))
+                }
+
+                await MainActor.run { self.scanProgress = Double(i + 1) / Double(total) }
             }
 
-            if await ocrService.isInBodyReport(image) {
-                let thumb = await requestImage(for: asset, targetSize: thumbSize, contentMode: .aspectFill)
-                detected.append(ScannedPhoto(asset: asset, thumbnail: thumb))
-            }
-
-            scanProgress = Double(i + 1) / Double(total)
-        }
+            return results
+        }.value
 
         scannedPhotos = detected
         isScanning = false
     }
 
     func loadFullImage(for asset: PHAsset) async -> UIImage? {
-        await requestImage(for: asset, targetSize: PHImageManagerMaximumSize)
+        await Task.detached(priority: .userInitiated) {
+            self.requestImageSync(for: asset, targetSize: PHImageManagerMaximumSize)
+        }.value
     }
 }
