@@ -281,6 +281,14 @@ footer {
   color: var(--muted);
 }
 
+.footer-links {
+  margin-top: .5rem;
+  display: flex;
+  gap: .5rem;
+  justify-content: center;
+  align-items: center;
+}
+
 a.inline { color: var(--primary); text-decoration: none; }
 a.inline:hover { text-decoration: underline; }
 

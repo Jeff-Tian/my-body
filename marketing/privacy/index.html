@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>隐私政策 - 我的身体 MyBody</title>
+  <meta name="description" content="《我的身体》iOS App 的隐私政策。我们不会收集、上传、分享你的任何健康数据，所有信息仅保存在你的设备上。" />
+  <link rel="stylesheet" href="../style.css" />
+  <style>
+    .legal {
+      max-width: 760px;
+      margin: 0 auto;
+      padding: 2.5rem 1.5rem 4rem;
+      line-height: 1.75;
+    }
+    .legal h2 { margin-top: 2rem; font-size: 1.25rem; }
+    .legal h1 { font-size: clamp(1.8rem, 4vw, 2.4rem); margin: 0 0 .5rem; }
+    .legal .meta { color: var(--muted); margin-bottom: 1.5rem; font-size: .95rem; }
+    .legal ul { padding-left: 1.25rem; }
+    .legal a { color: var(--primary); }
+    .back-link { display: inline-block; margin-bottom: 1.5rem; color: var(--primary); text-decoration: none; font-weight: 600; }
+  </style>
+</head>
+
+<body>
+  <main class="legal">
+    <a class="back-link" href="../">← 返回主页</a>
+    <h1>隐私政策</h1>
+    <p class="meta">最后更新：2026-04-19</p>
+
+    <p>感谢你使用《我的身体》（以下简称“本 App”）。我们非常重视你的隐私。本隐私政策说明本 App 如何处理你的信息。</p>
+
+    <h2>一、我们不收集任何个人信息</h2>
+    <p>本 App 是一款完全本地化的 InBody 体脂报告记录工具：</p>
+    <ul>
+      <li>不要求注册或登录任何账号；</li>
+      <li>不会上传、同步、分享你的体重、体脂、肌肉量等健康数据；</li>
+      <li>不会收集你的设备标识、位置、通讯录、联系人或广告标识符；</li>
+      <li>不集成任何第三方统计、广告或追踪 SDK。</li>
+    </ul>
+
+    <h2>二、本地数据存储</h2>
+    <p>你的所有数据通过 SwiftData 存储在你的设备本地（以及你自己的 iCloud 账户备份范围内，由系统自动管理），App 开发者无法访问。</p>
+
+    <h2>三、相册与相机权限</h2>
+    <p>为了识别 InBody 体脂仪打印出的报告图片，本 App 会请求以下权限：</p>
+    <ul>
+      <li><strong>相册访问</strong>：仅用于读取你主动选择的报告图片，并在设备本地通过 Apple Vision OCR 框架识别其中的数值。</li>
+      <li><strong>相机访问</strong>（可选）：仅用于直接拍摄 InBody 报告，识别过程同样在本地完成。</li>
+      <li><strong>iCloud 照片下载</strong>（可选）：开启后，扫描时会按需下载尚未缓存到本地的 iCloud 照片以完成识别，过程不会离开你的 Apple 账户体系。</li>
+    </ul>
+    <p>所有图片识别都在你的设备上完成，识别结果仅保存在本地数据库中，不会上传到任何服务器。</p>
+
+    <h2>四、第三方服务</h2>
+    <p>本 App 不使用任何第三方分析、广告或崩溃上报服务。系统级的 App Store 安装统计与 Apple 平台日志由 Apple 提供，受 Apple 自身隐私政策约束。</p>
+
+    <h2>五、儿童隐私</h2>
+    <p>本 App 不针对 13 周岁以下儿童设计，也不会有意收集儿童个人信息。</p>
+
+    <h2>六、政策更新</h2>
+    <p>如果隐私政策有任何更新，我们会在本页面发布最新版本，并更新顶部的“最后更新”日期。</p>
+
+    <h2>七、联系我们</h2>
+    <p>如对本政策有任何疑问，欢迎通过 GitHub 仓库 <a href="https://github.com/Jeff-Tian/my-body" target="_blank" rel="noopener">Jeff-Tian/my-body</a> 提交 Issue 与我们联系。</p>
+  </main>
+</body>
+
+</html>
