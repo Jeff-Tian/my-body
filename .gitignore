@@ -63,3 +63,8 @@ marketing/screenshots/*.png
 fastlane_output.log
 
 actions-runner/
+
+# Local secrets (copy of .env.example with real values; synced to GitHub via `make secrets-sync`)
+.env
+.env.*
+!.env.example

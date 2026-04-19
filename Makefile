@@ -335,3 +335,45 @@ endif
 	printf "$(YELLOW)[market] 访问地址: http://localhost:$$PORT/$(NC)\n"; \
 	printf "$(YELLOW)[market] 按 Ctrl+C 停止服务器$(NC)\n\n"; \
 	cd marketing && (python3 -m http.server $$PORT || python -m SimpleHTTPServer $$PORT)
+
+## secrets-sync: 从 .env 读取变量并同步到 GitHub repo secrets (通过 gh CLI)
+##   - 忽略以 # 开头的注释行和空行
+##   - 值为空的 KEY 会被跳过（不会清空已有 secret）
+##   - 需要已安装 gh 且通过 `gh auth login` 登录
+##   - 用法：先编辑 .env，再 `make secrets-sync`
+.PHONY: secrets-sync
+secrets-sync:
+	@if ! command -v gh >/dev/null 2>&1; then \
+		printf "$(YELLOW)未检测到 gh CLI。安装：brew install gh && gh auth login$(NC)\n"; exit 70; \
+	fi
+	@if [ ! -f .env ]; then \
+		printf "$(YELLOW)未找到 .env，请先从 .env.example 复制：cp .env.example .env$(NC)\n"; exit 1; \
+	fi
+	@REPO=$$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null); \
+	if [ -z "$$REPO" ]; then \
+		printf "$(YELLOW)无法确定当前仓库 (gh repo view 失败)，请在仓库目录下执行$(NC)\n"; exit 1; \
+	fi; \
+	printf "$(GREEN)[secrets-sync] 目标仓库: $$REPO$(NC)\n"; \
+	SET=0; SKIPPED=0; \
+	while IFS= read -r line || [ -n "$$line" ]; do \
+		case "$$line" in ''|\#*) continue ;; esac; \
+		key=$${line%%=*}; \
+		val=$${line#*=}; \
+		key=$$(printf '%s' "$$key" | tr -d '[:space:]'); \
+		case "$$val" in \"*\") val=$${val#\"}; val=$${val%\"} ;; esac; \
+		case "$$val" in \'*\') val=$${val#\'}; val=$${val%\'} ;; esac; \
+		if [ -z "$$key" ]; then continue; fi; \
+		if [ -z "$$val" ]; then \
+			printf "$(YELLOW)  - skip  $$key (empty)$(NC)\n"; \
+			SKIPPED=$$((SKIPPED+1)); continue; \
+		fi; \
+		printf '%s' "$$val" | gh secret set "$$key" --repo "$$REPO" --body - >/dev/null; \
+		printf "$(GREEN)  ✓ set   $$key$(NC)\n"; \
+		SET=$$((SET+1)); \
+	done < .env; \
+	printf "$(GREEN)[secrets-sync] 完成：设置 $$SET 个，跳过 $$SKIPPED 个$(NC)\n"
+
+## secrets-list: 列出当前仓库已有的 GitHub secrets（名称，不显示值）
+.PHONY: secrets-list
+secrets-list:
+	@gh secret list

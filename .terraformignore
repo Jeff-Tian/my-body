@@ -1,0 +1,60 @@
+# .terraformignore — controls what the Terraform CLI uploads to HCP Terraform
+# during remote runs. HCP only needs infra/terraform/**; everything else in
+# this repo is iOS build / marketing / runner assets that bloat the upload
+# with no value.
+#
+# Syntax is gitignore-like. Default excludes (.git, .terraform/, *.tfstate*)
+# are always applied on top of what you list here.
+# Paths are relative to the upload root, which for this repo is the repo
+# root itself (shown by `terraform plan` as "Terraform will upload the
+# contents of ...").
+
+# --- Xcode build artifacts ---
+build/
+DerivedData/
+*.xcresult/
+xcodebuild_output.txt
+fastlane_output.log
+
+# --- Self-hosted GitHub Actions runner working tree (very large) ---
+actions-runner/
+
+# --- Ruby / fastlane / bundler caches ---
+vendor/bundle/
+.bundle/
+fastlane/screenshots/
+fastlane/test_output/
+fastlane/report.xml
+fastlane/Preview.html
+
+# --- Marketing site generated screenshots (png blobs) ---
+marketing/screenshots/*.png
+
+# --- iOS / Swift source tree — not needed for DNS plans ---
+MyBody/
+MyBodyUITests/
+MyBody.xcodeproj/
+fastlane/
+marketing/
+scripts/
+
+# --- Misc caches ---
+node_modules/
+.DS_Store
+# .terraformignore — controls what the Terraform CLI uploads to HCP Terraform
+# during remote runs. HCP only needs infra/terraform/**; everything else in
+# this repo is iOS/marketing assets that bloat the upload with no value.
+#
+# Syntax is gitignore-like. Default excludes (.git, .terraform/, etc.) are
+# always applied on top of what you list here; negations (!) re-include.
+# Path is relative to the upload root, which for this repo is the repo root
+# (shown by `terraform plan` as "Terraform will upload the contents of ...").
+
+# --- Exclude everything by default ---
+*
+
+# --- Re-include the Terraform config we actually care about ---
+!infra/
+infra/*
+!infra/terraform/
+!infra/terraform/**

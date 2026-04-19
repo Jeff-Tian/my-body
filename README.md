@@ -48,6 +48,8 @@ gem install bundler        # 仅 `make screenshots` 需要（首次会自动 bun
 | `make clean` | 清理 `build/` 目录 |
 | `make screenshots` | 使用 fastlane snapshot 在模拟器中自动生成 App Store 截图（输出 `fastlane/screenshots/<lang>/*.png`） |
 | `make market` | 启动本地 HTTP 预览 `marketing/` 页面；加 `SNAPSHOT=1` 先重跑截图 |
+| `make secrets-sync` | 读取本地 `.env`，将其中非空变量通过 `gh` CLI 同步为当前仓库的 GitHub Actions secrets（upsert，空值跳过）|
+| `make secrets-list` | 列出当前仓库已配置的 GitHub Actions secrets 名称（不显示值）|
 | `make deps` | 检查 xcodegen / xcbeautify 等可选依赖 |
 | `make help` | 查看全部命令 |
 
@@ -82,6 +84,29 @@ SNAPSHOT_RESULT_BUNDLE=1 make screenshots
 - 由 `MyBodyUITests/SnapshotScreenshotsUITests.swift` 依次切换「首页 / 趋势 / 设置」Tab 完成截图。
 - UI 测试通过启动参数 `-UITestScreenshots 1` 让 App 注入示例 `InBodyRecord`（`MyBody/Utilities/ScreenshotSampleData.swift`），保证首页和趋势页有真实的数据曲线。
 - 产物路径：`fastlane/screenshots/zh-Hans/*.png`；`make market` 会自动把它们复制到 `marketing/screenshots/` 以供本地预览。
+
+### 同步 GitHub Actions Secrets（`make secrets-sync`）
+
+当某个 GitHub Actions workflow 需要 token 时，用 `.env` 本地管理、`make secrets-sync` 一键推送到仓库 secrets：
+
+```bash
+# 1. 首次：从模板创建 .env（已 gitignore，不会被提交）
+cp .env.example .env
+
+# 2. 填入真实值
+$EDITOR .env
+
+# 3. 同步到当前仓库的 GitHub Actions secrets（upsert，空值跳过）
+make secrets-sync
+
+# 查看已有 secrets 名称（不显示值）
+make secrets-list
+```
+
+- 依赖 `gh` CLI：`brew install gh && gh auth login`。
+- `.env` 中**空值的 KEY 会跳过**，不会覆盖已有 secret；要真正删除请到 GitHub Settings 或用 `gh secret delete`。
+- 支持的变量见 [.env.example](.env.example)。
+- **Vercel DNS（[infra/terraform/](infra/terraform/README.md)）不需要 GitHub secrets**：plan/apply 跑在 HCP Terraform 上，Vercel token 配在 HCP workspace 的 Variables 里。`.env` 里的 `VERCEL_API_TOKEN` 仅供本地 `terraform plan` 使用。
 
 ## 项目结构
 
