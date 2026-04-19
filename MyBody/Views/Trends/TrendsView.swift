@@ -65,7 +65,9 @@ struct TrendsView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
 
                     // History list
-                    HistoryListView(records: viewModel.filteredRecords)
+                    HistoryListView(records: viewModel.filteredRecords) {
+                        viewModel.fetchRecords()
+                    }
                 }
                 .padding(.vertical)
             }
@@ -76,6 +78,7 @@ struct TrendsView: View {
             .toolbarBackground(.visible, for: .navigationBar)
             .onAppear {
                 viewModel.setup(context: modelContext)
+                viewModel.fetchRecords()
             }
         }
     }

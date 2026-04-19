@@ -1,7 +1,13 @@
 import SwiftUI
+import SwiftData
 
 struct HistoryListView: View {
+    @Environment(\.modelContext) private var modelContext
     let records: [InBodyRecord]
+    /// 记录被删除后通知父视图刷新列表
+    var onDelete: (() -> Void)? = nil
+
+    @State private var pendingDelete: InBodyRecord?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -20,8 +26,33 @@ struct HistoryListView: View {
                         HistoryRow(record: record)
                     }
                     .buttonStyle(.plain)
+                    .contextMenu {
+                        Button(role: .destructive) {
+                            pendingDelete = record
+                        } label: {
+                            Label("删除", systemImage: "trash")
+                        }
+                    }
                 }
             }
+        }
+        .alert(
+            "确认删除",
+            isPresented: Binding(
+                get: { pendingDelete != nil },
+                set: { if !$0 { pendingDelete = nil } }
+            ),
+            presenting: pendingDelete
+        ) { record in
+            Button("取消", role: .cancel) { pendingDelete = nil }
+            Button("删除", role: .destructive) {
+                modelContext.delete(record)
+                try? modelContext.save()
+                pendingDelete = nil
+                onDelete?()
+            }
+        } message: { _ in
+            Text("删除后无法恢复，确定要删除这条记录吗？")
         }
     }
 }

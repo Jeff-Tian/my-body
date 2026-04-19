@@ -9,30 +9,7 @@ struct PhotoScanView: View {
     var body: some View {
         NavigationStack {
             Group {
-                if viewModel.showParseResult, let report = viewModel.parsedReport {
-                    ParseConfirmView(
-                        report: report,
-                        image: viewModel.currentImage,
-                        onSave: { updatedReport in
-                            viewModel.saveCurrentRecord(report: updatedReport)
-                            if viewModel.currentParseIndex >= viewModel.selectedPhotos.count {
-                                dismiss()
-                            } else {
-                                viewModel.isParsing = true
-                                Task { await viewModel.parseNextPhoto() }
-                            }
-                        },
-                        onSkip: {
-                            viewModel.skipCurrentPhoto()
-                            if viewModel.currentParseIndex >= viewModel.selectedPhotos.count {
-                                dismiss()
-                            } else {
-                                viewModel.isParsing = true
-                                Task { await viewModel.parseNextPhoto() }
-                            }
-                        }
-                    )
-                } else if viewModel.showConfirmation {
+                if viewModel.showConfirmation {
                     ScanConfirmView(viewModel: viewModel) {
                         viewModel.showConfirmation = false
                         viewModel.currentParseIndex = 0
@@ -56,6 +33,9 @@ struct PhotoScanView: View {
             .onAppear {
                 viewModel.setup(context: modelContext)
                 Task { await viewModel.startScan() }
+            }
+            .onChange(of: viewModel.batchFinished) { _, finished in
+                if finished { dismiss() }
             }
         }
     }

@@ -5,10 +5,37 @@ struct EditRecordView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
     @Bindable var record: InBodyRecord
+    @State private var showFullPhoto = false
 
     var body: some View {
         NavigationStack {
             Form {
+                if let data = record.photoData, let uiImage = UIImage(data: data) {
+                    Section("原始照片") {
+                        Button { showFullPhoto = true } label: {
+                            HStack {
+                                Image(uiImage: uiImage)
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fill)
+                                    .frame(width: 60, height: 80)
+                                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("查看原始照片")
+                                        .font(.subheadline)
+                                        .foregroundColor(.primary)
+                                    Text("点击放大以核对数值")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .foregroundColor(.secondary)
+                                    .font(.caption)
+                            }
+                        }
+                    }
+                }
+
                 Section("基本信息") {
                     DatePicker("测量日期", selection: $record.scanDate, displayedComponents: .date)
                 }
@@ -63,6 +90,9 @@ struct EditRecordView: View {
                     }
                     .fontWeight(.bold)
                 }
+            }
+            .fullScreenCover(isPresented: $showFullPhoto) {
+                FullPhotoView(photoData: record.photoData)
             }
         }
     }

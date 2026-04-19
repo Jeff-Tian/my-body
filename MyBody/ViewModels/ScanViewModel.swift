@@ -15,13 +15,18 @@ final class ScanViewModel {
     var showConfirmation = false
 
     var currentParseIndex = 0
-    var parsedReport: OCRService.ParsedReport?
-    var currentImage: UIImage?
     var currentThumbnail: UIImage?
     var currentAsset: PHAsset?
     var isParsing = false
-    var showParseResult = false
     var parseStageMessage: String = ""
+
+    /// 批量识别并保存完成后置为 true，View 据此关闭 sheet。
+    var batchFinished = false
+    /// 批量导入完成时的统计
+    var savedCount = 0
+    var skippedCount = 0
+    /// 因已存在同一照片的记录而跳过的数量（幂等去重）
+    var duplicateCount = 0
 
     private let photoService = PhotoScanService()
     private let ocrService = OCRService()
@@ -79,89 +84,107 @@ final class ScanViewModel {
 
     func parseNextPhoto() async {
         let selected = selectedPhotos
-        guard currentParseIndex < selected.count else { return }
+        guard currentParseIndex < selected.count else {
+            batchFinished = true
+            isParsing = false
+            return
+        }
 
         isParsing = true
         let photo = selected[currentParseIndex]
         currentAsset = photo.asset
         currentThumbnail = photo.thumbnail
-        currentImage = nil
-        parsedReport = nil
         parseStageMessage = "正在加载图片…"
 
-        guard let image = await photoService.loadFullImage(for: photo.asset) else {
-            // 图片加载失败（常见于 Mac "Designed for iPhone" 或 iCloud 原图未下载）：
-            // 生成一份空报告让用户手动录入，避免白屏卡死。
-            var fallback = OCRService.ParsedReport()
-            fallback.scanDate = photo.asset.creationDate
-            fallback.failedFields = Set(["all"])
-            parsedReport = fallback
+        // 幂等：若已导入过同一张相册照片，直接跳过，避免重复记录。
+        let assetId = photo.asset.localIdentifier
+        if let context = modelContext, recordExists(forAssetId: assetId, in: context) {
+            duplicateCount += 1
+            currentParseIndex += 1
             parseStageMessage = ""
-            isParsing = false
-            showParseResult = true
+            if currentParseIndex < selected.count {
+                await parseNextPhoto()
+            } else {
+                batchFinished = true
+                isParsing = false
+            }
             return
         }
 
-        currentImage = image
-        parseStageMessage = "正在识别文字…"
-        let ocr = ocrService
-        // Run OCR on background thread
-        let result: OCRService.ParsedReport = await Task.detached(priority: .userInitiated) {
-            do {
-                return try ocr.parseReport(from: image)
-            } catch {
-                var failed = OCRService.ParsedReport()
-                failed.failedFields = Set(["all"])
-                return failed
-            }
-        }.value
-        parseStageMessage = "正在解析字段…"
-        var finalReport = result
+        let image = await photoService.loadFullImage(for: photo.asset)
+
+        var finalReport: OCRService.ParsedReport
+        if let image {
+            parseStageMessage = "正在识别文字…"
+            let ocr = ocrService
+            let result: OCRService.ParsedReport = await Task.detached(priority: .userInitiated) {
+                do {
+                    return try ocr.parseReport(from: image)
+                } catch {
+                    var failed = OCRService.ParsedReport()
+                    failed.failedFields = Set(["all"])
+                    return failed
+                }
+            }.value
+            finalReport = result
+        } else {
+            // 图片加载失败（Mac "Designed for iPhone" 或 iCloud 原图未下载）：
+            // 仍然创建一条空记录，用户稍后手动补录。
+            var fallback = OCRService.ParsedReport()
+            fallback.failedFields = Set(["all"])
+            finalReport = fallback
+            skippedCount += 1
+        }
+
         if finalReport.scanDate == nil {
             finalReport.scanDate = photo.asset.creationDate
         }
-        parsedReport = finalReport
 
+        // 自动保存：把照片数据一起存下来，以便日后核对。
+        if let context = modelContext {
+            let photoData = image?.jpegData(compressionQuality: 0.7)
+            let record = finalReport.toRecord(
+                photoData: photoData,
+                assetIdentifier: photo.asset.localIdentifier
+            )
+            context.insert(record)
+            try? context.save()
+            savedCount += 1
+        }
+
+        currentParseIndex += 1
         parseStageMessage = ""
-        isParsing = false
-        showParseResult = true
-    }
 
-    func saveCurrentRecord(report: OCRService.ParsedReport) {
-        guard let context = modelContext else { return }
-
-        let photoData = currentImage?.jpegData(compressionQuality: 0.7)
-        let record = report.toRecord(
-            photoData: photoData,
-            assetIdentifier: currentAsset?.localIdentifier
-        )
-
-        context.insert(record)
-        try? context.save()
-
-        currentParseIndex += 1
-        showParseResult = false
-        parsedReport = nil
-        currentImage = nil
-    }
-
-    func skipCurrentPhoto() {
-        currentParseIndex += 1
-        showParseResult = false
-        parsedReport = nil
-        currentImage = nil
+        // 继续下一张，直到全部处理完。
+        if currentParseIndex < selected.count {
+            await parseNextPhoto()
+        } else {
+            batchFinished = true
+            isParsing = false
+        }
     }
 
     func reset() {
         currentParseIndex = 0
-        parsedReport = nil
-        currentImage = nil
         currentThumbnail = nil
         currentAsset = nil
         isParsing = false
-        showParseResult = false
         showConfirmation = false
         scannedPhotos = []
         parseStageMessage = ""
+        batchFinished = false
+        savedCount = 0
+        skippedCount = 0
+        duplicateCount = 0
+    }
+
+    /// 判断相册 assetId 是否已存在对应的 InBodyRecord，用于批量导入去重。
+    private func recordExists(forAssetId assetId: String, in context: ModelContext) -> Bool {
+        var descriptor = FetchDescriptor<InBodyRecord>(
+            predicate: #Predicate { $0.photoAssetIdentifier == assetId }
+        )
+        descriptor.fetchLimit = 1
+        let count = (try? context.fetchCount(descriptor)) ?? 0
+        return count > 0
     }
 }
