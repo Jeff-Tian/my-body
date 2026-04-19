@@ -41,14 +41,13 @@ gen:
 		echo "[gen] ⚠️  未检测到开发者 Team，字段将留空（模拟器构建不受影响）"; \
 	fi; \
 	DEVELOPMENT_TEAM=$$TEAM xcodegen generate
-	@# 禁用 Metal API Validation / Shader Validation，避免在 “Designed for iPhone on Mac”
-	@# 上运行时 Vision 内部 shared-storage 纹理触发 synchronizeResource 断言崩溃。
+	@# 反勾 Metal 全部 4 项诊断(API Validation / Shader Validation /
+	@# Show & Log Graphics Overview)。在 "Designed for iPhone on Mac" 上,
+	@# Vision 使用 shared-storage Metal 纹理会触发 synchronizeResource 断言崩溃,
+	@# 同时 GPU overview 日志也会污染 run-mac 的输出。
 	@SCHEME_FILE="$(PROJECT)/xcshareddata/xcschemes/$(SCHEME).xcscheme"; \
 	if [ -f "$$SCHEME_FILE" ]; then \
-		if ! grep -q 'enableGPUValidationMode' "$$SCHEME_FILE"; then \
-			/usr/bin/sed -i '' 's|<LaunchAction$$|<LaunchAction\'$$'\n''      enableGPUValidationMode = "1"\'$$'\n''      enableGPUShaderValidationMode = "1"|' "$$SCHEME_FILE"; \
-			echo "[gen] 已在 scheme 中禁用 Metal API / Shader Validation"; \
-		fi; \
+		/usr/bin/python3 scripts/patch_scheme_metal.py "$$SCHEME_FILE"; \
 	fi
 
 ## resolve-team: 输出要使用的 DEVELOPMENT_TEAM（内部使用）

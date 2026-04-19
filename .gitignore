@@ -45,3 +45,5 @@ playground.xcworkspace
 # Misc
 *.swp
 *~
+
+xcodebuild_output.txt
