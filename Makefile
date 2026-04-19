@@ -1,11 +1,19 @@
 # Makefile for MyBody
 # 统一封装常用命令，无需打开 Xcode 即可在模拟器中运行。
 
+# 自动载入 .env（若存在）—— 里面的 KEY=VALUE 同时成为 make 变量和 recipe 环境变量。
+# 这样 `make release` 无需先手动 `source .env`。
+# .env 必须使用 `KEY=VALUE` 形式，不要加 `export` 前缀或引号（参考 .env.example）。
+ifneq (,$(wildcard ./.env))
+    include .env
+    export
+endif
+
 SCHEME ?= MyBody
 PROJECT ?= MyBody.xcodeproj
 SIMULATOR_DEVICE ?= iPhone 16
 CONFIG ?= Debug
-BUNDLE_ID ?= brickverse.MyBody
+BUNDLE_ID ?= brickverse.MyBodyApp
 PRODUCT_NAME ?= 我的身体
 DERIVED_DATA ?= build/DerivedData
 
@@ -377,3 +385,161 @@ secrets-sync:
 .PHONY: secrets-list
 secrets-list:
 	@gh secret list
+
+# ---------------------------------------------------------------------------
+# 本地发版：上传 App Store 元数据 + 截图到 ASC（不打包、不提审）
+# ---------------------------------------------------------------------------
+# 一次性准备：
+#   make install_asc_key             # 半自动：打开 ASC → 监听 Downloads →
+#                                    # 移动 .p8 → chmod → 写 .env（一条命令搞定）
+# 每次发版：
+#   make release                     # Makefile 会自动载入 .env，无需 source
+#
+# 可选开关：
+#   SKIP_SNAPSHOT=1    跳过重跑截图（直接用 fastlane/screenshots 里已有文件）
+#   SKIP_METADATA=1    跳过元数据上传（只推截图）
+#   SKIP_SCREENSHOTS=1 跳过截图上传（只推元数据）
+
+## install_asc_key: 半自动安装 ASC API Key（打开浏览器 → 监听 Downloads → 写 .env）
+##   用法：
+##     make install_asc_key                              # 正常流程
+##     make install_asc_key ASC_P8=/path/to/AuthKey.p8   # 已下载好，直接指定路径
+.PHONY: install_asc_key
+install_asc_key:
+	@bash scripts/install_asc_key.sh $(ASC_P8)
+
+## check_asc_env: 校验 ASC API Key 所需环境变量是否已注入
+.PHONY: check_asc_env
+check_asc_env:
+	@set -eu; \
+	missing=""; \
+	for var in APP_STORE_CONNECT_KEY_IDENTIFIER APP_STORE_CONNECT_ISSUER_ID APP_STORE_CONNECT_PRIVATE_KEY_PATH; do \
+		eval "val=\$${$$var:-}"; \
+		if [ -z "$$val" ]; then missing="$$missing $$var"; fi; \
+	done; \
+	if [ -n "$$missing" ]; then \
+		printf "$(YELLOW)[check_asc_env] 缺少环境变量:%s$(NC)\n" "$$missing"; \
+		echo "请在 .env 填入 ASC API Key 三元组（参考 .env.example / docs/release.md）。"; \
+		echo "Makefile 会在执行时自动载入 .env，无需手动 source。"; \
+		exit 64; \
+	fi; \
+	if [ ! -f "$$APP_STORE_CONNECT_PRIVATE_KEY_PATH" ]; then \
+		printf "$(YELLOW)[check_asc_env] .p8 文件不存在: $$APP_STORE_CONNECT_PRIVATE_KEY_PATH$(NC)\n"; \
+		exit 65; \
+	fi; \
+	printf "$(GREEN)[check_asc_env] ASC API Key 齐全$(NC)\n"
+
+## check_app_exists: 用 API Key 查询 App 是否已在 ASC 建档（不需要 Apple ID）
+.PHONY: check_app_exists
+check_app_exists: check_asc_env
+	@set -eu; \
+	if [ ! -f Gemfile.lock ]; then bundle install >/dev/null; fi; \
+	bundle exec ruby -e 'require "spaceship"; \
+	  t = Spaceship::ConnectAPI::Token.create( \
+	    key_id: ENV["APP_STORE_CONNECT_KEY_IDENTIFIER"], \
+	    issuer_id: ENV["APP_STORE_CONNECT_ISSUER_ID"], \
+	    key: File.read(ENV["APP_STORE_CONNECT_PRIVATE_KEY_PATH"])); \
+	  Spaceship::ConnectAPI.token = t; \
+	  a = Spaceship::ConnectAPI::App.find("$(BUNDLE_ID)"); \
+	  if a; puts "\e[0;32m[check_app_exists] ✅ 已建档: #{a.name} (id=#{a.id})\e[0m"; \
+	  else; \
+	    puts "\e[0;33m[check_app_exists] ❌ App 尚未在 ASC 建档\e[0m"; \
+	    puts "请到 https://appstoreconnect.apple.com/apps 点 + → 新 App，填："; \
+	    puts "  Bundle ID: $(BUNDLE_ID)"; \
+	    puts "  名称     : $(PRODUCT_NAME)"; \
+	    puts "  主要语言 : 简体中文"; \
+	    puts "  SKU      : MyBody"; \
+	    exit 66; \
+	  end'
+
+## register_bundle_id: 在 Developer Portal 注册 Bundle ID（用 ASC API Key，无需 Apple ID）
+.PHONY: register_bundle_id
+register_bundle_id: check_asc_env
+	@set -eu; \
+	if [ ! -f Gemfile.lock ]; then bundle install >/dev/null; fi; \
+	printf "$(GREEN)[register_bundle_id] 注册 $(BUNDLE_ID) 到 Developer Portal…$(NC)\n"; \
+	bundle exec fastlane register_bundle_id
+
+## push_metadata: 仅上传 App Store 元数据 + 截图到 ASC（不打包、不提审）
+.PHONY: push_metadata
+push_metadata: check_asc_env
+	@set -eu; \
+	if ! command -v bundle >/dev/null 2>&1; then \
+		printf "$(YELLOW)[push_metadata] 未安装 bundler：gem install bundler$(NC)\n"; exit 70; \
+	fi; \
+	if [ ! -f Gemfile.lock ]; then \
+		printf "$(GREEN)[push_metadata] 首次运行，执行 bundle install…$(NC)\n"; \
+		bundle install; \
+	fi; \
+	printf "$(GREEN)[push_metadata] 启动 fastlane push_metadata…$(NC)\n"; \
+	bundle exec fastlane push_metadata
+
+## update_fastlane: 升级 fastlane 到最新版（避免 ASC API 变更导致的兼容问题）
+##   FASTLANE_SKIP_UPDATE_CHECK=1 跳过（默认每 24h 自动尝试一次）
+.PHONY: update_fastlane
+update_fastlane:
+	@set -eu; \
+	if [ "$${FASTLANE_SKIP_UPDATE_CHECK:-0}" = "1" ]; then \
+		printf "$(YELLOW)[update_fastlane] 跳过 (FASTLANE_SKIP_UPDATE_CHECK=1)$(NC)\n"; \
+		exit 0; \
+	fi; \
+	stamp=".fastlane-last-update"; \
+	if [ -f "$$stamp" ] && [ $$(( $$(date +%s) - $$(stat -f %m "$$stamp" 2>/dev/null || stat -c %Y "$$stamp") )) -lt 86400 ]; then \
+		printf "$(GREEN)[update_fastlane] 24h 内已检查过，跳过$(NC)\n"; \
+		exit 0; \
+	fi; \
+	printf "$(GREEN)[update_fastlane] bundle update fastlane…$(NC)\n"; \
+	bundle update fastlane || printf "$(YELLOW)[update_fastlane] 更新失败，继续使用当前版本$(NC)\n"; \
+	touch "$$stamp"
+
+## screenshots_if_stale: 按需重拍截图（上游源变过或超过 MAX_AGE_HOURS 才重拍）
+##   FORCE_SNAPSHOT=1      强制重拍
+##   SKIP_SNAPSHOT=1       无条件跳过
+##   SNAPSHOT_MAX_AGE=24   小时数（默认 24h）
+.PHONY: screenshots_if_stale
+screenshots_if_stale:
+	@set -eu; \
+	if [ "$${SKIP_SNAPSHOT:-0}" = "1" ]; then \
+		printf "$(YELLOW)[screenshots_if_stale] 跳过 (SKIP_SNAPSHOT=1)$(NC)\n"; \
+		exit 0; \
+	fi; \
+	if [ "$${FORCE_SNAPSHOT:-0}" = "1" ]; then \
+		printf "$(GREEN)[screenshots_if_stale] 强制重拍 (FORCE_SNAPSHOT=1)$(NC)\n"; \
+		$(MAKE) screenshots; \
+		exit 0; \
+	fi; \
+	shot_dir="fastlane/screenshots/zh-Hans"; \
+	if [ ! -d "$$shot_dir" ] || [ -z "$$(ls -A "$$shot_dir" 2>/dev/null | grep -E '\\.png$$' || true)" ]; then \
+		printf "$(YELLOW)[screenshots_if_stale] 截图目录空，首次生成…$(NC)\n"; \
+		$(MAKE) screenshots; \
+		exit 0; \
+	fi; \
+	max_age=$${SNAPSHOT_MAX_AGE:-24}; \
+	newest_shot=$$(ls -t "$$shot_dir"/*.png 2>/dev/null | head -1); \
+	newest_src=$$(find MyBody MyBodyUITests project.yml -type f \( -name '*.swift' -o -name '*.yml' -o -name '*.json' -o -name '*.xcstrings' \) -print0 2>/dev/null | xargs -0 ls -t 2>/dev/null | head -1); \
+	if [ -n "$$newest_src" ] && [ "$$newest_src" -nt "$$newest_shot" ]; then \
+		printf "$(YELLOW)[screenshots_if_stale] 源码比截图新 ($$newest_src) → 重拍$(NC)\n"; \
+		$(MAKE) screenshots; \
+		exit 0; \
+	fi; \
+	age_sec=$$(( $$(date +%s) - $$(stat -f %m "$$newest_shot" 2>/dev/null || stat -c %Y "$$newest_shot") )); \
+	age_hr=$$(( age_sec / 3600 )); \
+	if [ "$$age_hr" -ge "$$max_age" ]; then \
+		printf "$(YELLOW)[screenshots_if_stale] 截图已 $${age_hr}h 未更新 (>=$${max_age}h) → 重拍$(NC)\n"; \
+		$(MAKE) screenshots; \
+		exit 0; \
+	fi; \
+	printf "$(GREEN)[screenshots_if_stale] ✅ 截图新鲜 (最新 $${age_hr}h 前)，跳过重拍$(NC)\n"
+
+## release: 一键发版 → 按需生成截图 → 上传元数据 + 截图到 ASC
+##   FORCE_SNAPSHOT=1 强制重拍截图
+##   SKIP_SNAPSHOT=1  无条件跳过截图
+##   SNAPSHOT_MAX_AGE=24  截图新鲜度阈值（小时）
+.PHONY: release
+release: check_asc_env check_app_exists update_fastlane
+	@printf "$(GREEN)==> [1/2] 检查 / 生成 App Store 截图$(NC)\n"
+	@$(MAKE) screenshots_if_stale
+	@printf "$(GREEN)==> [2/2] 上传元数据 + 截图到 App Store Connect$(NC)\n"
+	@$(MAKE) push_metadata
+	@printf "$(GREEN)🎉 发版完成（仅元数据 + 截图，未上传二进制）$(NC)\n"
+

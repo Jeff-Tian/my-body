@@ -1,4 +1,4 @@
-app_identifier("brickverse.MyBody") # Bundle identifier
+app_identifier("brickverse.MyBodyApp") # Bundle identifier
 # apple_id("your-apple-id@example.com")
 # team_id("XXXXXXXXXX")
 

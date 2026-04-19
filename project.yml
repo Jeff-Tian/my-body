@@ -1,6 +1,10 @@
 name: MyBody
 options:
   bundleIdPrefix: brickverse
+  # 主开发语言 = 简体中文；对齐 ASC 的 Primary Language，避免 Xcode 后续自动
+  # 把 CFBundleDevelopmentRegion 设成 en。未来追加英文本地化时，原文(中文)会
+  # 作为 fallback。
+  developmentLanguage: "zh-Hans"
   deploymentTarget:
     iOS: "17.0"
   xcodeVersion: "15.0"
@@ -34,7 +38,7 @@ targets:
     settings:
       base:
         INFOPLIST_FILE: MyBody/Info.plist
-        PRODUCT_BUNDLE_IDENTIFIER: brickverse.MyBody
+        PRODUCT_BUNDLE_IDENTIFIER: brickverse.MyBodyApp
         PRODUCT_NAME: 我的身体
         DEVELOPMENT_TEAM: "${DEVELOPMENT_TEAM}"
         CODE_SIGN_STYLE: Automatic
@@ -64,7 +68,7 @@ targets:
       - target: MyBody
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: brickverse.MyBodyUITests
+        PRODUCT_BUNDLE_IDENTIFIER: brickverse.MyBodyAppUITests
         DEVELOPMENT_TEAM: "${DEVELOPMENT_TEAM}"
         CODE_SIGN_STYLE: Automatic
         SWIFT_VERSION: "5.9"

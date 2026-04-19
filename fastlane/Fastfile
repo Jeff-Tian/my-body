@@ -8,7 +8,32 @@ require_relative 'device_os_version_patch'
 
 default_platform(:ios)
 
+# Set up App Store Connect API Key from env vars if provided. Used by
+# `push_metadata` (and any future lane that talks to ASC). No-op when the
+# env vars are missing so `make screenshots` still works offline.
+before_all do |lane|
+  key_id    = ENV['APP_STORE_CONNECT_KEY_IDENTIFIER']
+  issuer_id = ENV['APP_STORE_CONNECT_ISSUER_ID']
+  key_path  = ENV['APP_STORE_CONNECT_PRIVATE_KEY_PATH']
+
+  if key_id && !key_id.empty? && issuer_id && !issuer_id.empty? && key_path && !key_path.empty?
+    UI.user_error!("APP_STORE_CONNECT_PRIVATE_KEY_PATH 不存在: #{key_path}") unless File.exist?(key_path)
+    app_store_connect_api_key(
+      key_id: key_id,
+      issuer_id: issuer_id,
+      key_filepath: File.expand_path(key_path),
+      duration: 1200,
+      in_house: false
+    )
+  end
+end
+
 platform :ios do
+  APP_IDENTIFIER = 'brickverse.MyBodyApp'
+  APP_NAME       = '我的身体'
+  PRIMARY_LANG   = 'Simplified Chinese'
+  APP_SKU        = 'MyBody'
+
   desc "Generate localized app screenshots via UI tests"
   lane :screenshots do
     derived_data_path = File.expand_path('../build/DerivedDataSnapshot', __dir__)
@@ -27,5 +52,174 @@ platform :ios do
       result_bundle: ENV['SNAPSHOT_RESULT_BUNDLE'].to_s == '1',
       output_simulator_logs: ENV['SNAPSHOT_SIM_LOGS'].to_s == '1'
     )
+  end
+
+  desc "Upload App Store metadata + screenshots to ASC (no binary, no review submission)"
+  lane :push_metadata do
+    ensure_app_on_asc
+
+    metadata_dir    = File.expand_path('metadata', __dir__)
+    screenshots_dir = File.expand_path('screenshots', __dir__)
+
+    # 清理 capture_screenshots 留下的非 locale 目录，避免 deliver 报
+    # "Unsupported directory name(s)"。xcresult 只在本地调试有用，不上传。
+    if Dir.exist?(screenshots_dir)
+      %w[test_output].each do |bad|
+        path = File.join(screenshots_dir, bad)
+        if Dir.exist?(path)
+          UI.message("清理 #{path}（UI test 输出，不该进入上传目录）")
+          FileUtils.rm_rf(path)
+        end
+      end
+    end
+
+    skip_metadata    = ENV['SKIP_METADATA'].to_s == '1' || !Dir.exist?(metadata_dir)
+    skip_screenshots = ENV['SKIP_SCREENSHOTS'].to_s == '1' || !Dir.exist?(screenshots_dir)
+
+    if skip_metadata && skip_screenshots
+      UI.user_error!("没有可上传的内容：fastlane/metadata 与 fastlane/screenshots 都不存在或被跳过")
+    end
+
+    if !Dir.exist?(metadata_dir) && ENV['SKIP_METADATA'].to_s != '1'
+      UI.important("fastlane/metadata/ 不存在 → 跳过文案上传。要管理文案请执行一次：")
+      UI.important("  cd fastlane && bundle exec fastlane deliver download_metadata \\")
+      UI.important("    --app_identifier #{APP_IDENTIFIER} --force")
+    end
+
+    UI.message("push_metadata: skip_metadata=#{skip_metadata} skip_screenshots=#{skip_screenshots}")
+
+    upload_to_app_store(
+      app_identifier: APP_IDENTIFIER,
+      skip_binary_upload: true,
+      skip_metadata: skip_metadata,
+      skip_screenshots: skip_screenshots,
+      overwrite_screenshots: true,
+      force: true,                          # 跳过 HTML 预览确认
+      run_precheck_before_submit: false,
+      submit_for_review: false,
+      precheck_include_in_app_purchases: false,
+      metadata_path: metadata_dir,
+      screenshots_path: screenshots_dir,
+      ignore_language_directory_validation: true    # 容忍 xcresult 等残留目录
+    )
+  end
+
+  desc "Ensure Bundle ID exists on Developer Portal (idempotent, via ASC API)"
+  lane :register_bundle_id do
+    # 用 ASC API 的 Bundle IDs 接口注册 Developer Portal 的 App ID。
+    # App Manager 角色的 Key 即可。无需 Apple ID + 2FA。
+    existing = Spaceship::ConnectAPI::BundleId.all(
+      filter: { identifier: APP_IDENTIFIER }
+    ).first
+
+    if existing
+      UI.success("Bundle ID 已在 Developer Portal 注册：#{APP_IDENTIFIER} (id=#{existing.id})")
+      next existing
+    end
+
+    UI.message("在 Developer Portal 注册新的 Bundle ID：#{APP_IDENTIFIER}")
+    created = Spaceship::ConnectAPI::BundleId.create(
+      name: APP_SKU,               # Developer Portal 里的 description，只接受 ASCII
+      identifier: APP_IDENTIFIER,
+      platform: 'IOS',
+      seed_id: nil
+    )
+    UI.success("已注册 Bundle ID：#{APP_IDENTIFIER} (id=#{created.id})")
+    created
+  end
+
+  desc "Ensure an App record exists on App Store Connect (idempotent)"
+  lane :ensure_app_on_asc do
+    # Step 1: 确保 Developer Portal 侧已注册 Bundle ID（ASC 建 App 的前置条件）
+    register_bundle_id
+
+    # Step 2: 查 ASC 侧 App 是否已存在。App Manager 角色的 Key 即可读取，
+    # 无需 Admin 权限；也完全不需要 Apple ID + 2FA。
+    existing = begin
+      Spaceship::ConnectAPI::App.find(APP_IDENTIFIER)
+    rescue => e
+      UI.important("查询 ASC 时出错（将尝试创建）：#{e.message}")
+      nil
+    end
+
+    if existing
+      UI.success("App 已存在于 ASC，跳过创建：#{APP_IDENTIFIER} (id=#{existing.id})")
+      ensure_draft_version(existing)
+      next existing
+    end
+
+    # App 不存在 → 需要创建。produce 通过 API 创建 App 要求 Key 是 Admin 角色；
+    # App Manager 角色会回退到 Apple ID + 2FA，因此这里明确提示用户。
+    unless ENV['FASTLANE_USER'] && !ENV['FASTLANE_USER'].empty?
+      UI.user_error!(<<~MSG)
+        App 在 App Store Connect 尚未创建，需要首次建档。
+
+        选项 A（推荐，一次性）：
+          手动到 https://appstoreconnect.apple.com/apps 点「+ → 新建 App」：
+            - Bundle ID: #{APP_IDENTIFIER}
+            - 名称: #{APP_NAME}
+            - 主要语言: #{PRIMARY_LANG}
+            - SKU: #{APP_SKU}
+          建完再跑 `make release` —— 以后永远自动。
+
+        选项 B：
+          让 produce 通过 Apple ID + 2FA 创建。先 export 一下再重跑：
+            export FASTLANE_USER=你的AppleID邮箱
+          （若启用了 2FA，还需要 FASTLANE_PASSWORD 或 FASTLANE_SESSION）
+
+        选项 C：
+          把 ASC API Key 的角色升级为 Admin（在 ASC 的 Users and Access →
+          Integrations → Team Keys），然后直接重跑。
+      MSG
+    end
+
+    produce(
+      app_identifier: APP_IDENTIFIER,
+      app_name: APP_NAME,
+      language: PRIMARY_LANG,
+      app_version: '1.0',
+      sku: APP_SKU,
+      platform: 'ios',
+      skip_itc: false,
+      skip_devcenter: true          # Bundle ID 已由 register_bundle_id 注册过
+    )
+  end
+
+  # 确保 App 有一个可编辑的草稿版本（PREPARE_FOR_SUBMISSION 等状态）。
+  # 全新 App 上传 metadata/截图前必须先有 Version，否则 deliver 会在
+  # fetch_app_store_review_detail 上崩 "No data"。幂等：已有草稿则跳过。
+  def ensure_draft_version(app, version: '1.0')
+    editable = app.get_edit_app_store_version(platform: Spaceship::ConnectAPI::Platform::IOS)
+    if editable
+      UI.success("已有可编辑版本：v#{editable.version_string} (#{editable.app_store_state})")
+    else
+      UI.message("App 无可编辑版本 → 创建 v#{version} 草稿…")
+      editable = Spaceship::ConnectAPI::AppStoreVersion.create(
+        app_id: app.id,
+        version_string: version,
+        platform: Spaceship::ConnectAPI::Platform::IOS
+      )
+      UI.success("已创建草稿版本：v#{editable.version_string} (id=#{editable.id})")
+    end
+
+    # deliver 的 review_attachment_file 会无条件 fetch AppStoreReviewDetail，
+    # 全新 Version 还没这条记录就会崩 "No data"。这里主动创建一条占位的。
+    begin
+      editable.fetch_app_store_review_detail
+      UI.success("Review Detail 已存在，跳过创建")
+    rescue
+      UI.message("创建空的 App Store Review Detail（占位，后续可随时在 ASC 编辑）…")
+      editable.create_app_store_review_detail(attributes: {
+        contact_first_name: 'Release',
+        contact_last_name:  'Bot',
+        contact_email:      (ENV['ASC_REVIEW_CONTACT_EMAIL'] || 'release@example.com'),
+        contact_phone:      (ENV['ASC_REVIEW_CONTACT_PHONE'] || '+1 4155551234'),
+        demo_account_required: false,
+        notes: 'Auto-created by make release. Update in ASC → App Review Information.'
+      })
+      UI.success("已创建 Review Detail 占位")
+    end
+
+    editable
   end
 end
