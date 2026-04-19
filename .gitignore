@@ -47,3 +47,11 @@ playground.xcworkspace
 *~
 
 xcodebuild_output.txt
+# fastlane
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/**/*.png
+fastlane/screenshots/**/*.html
+fastlane/test_output/
+.bundle/
+vendor/bundle/

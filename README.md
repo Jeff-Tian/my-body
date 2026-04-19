@@ -29,6 +29,7 @@ make run
 brew install xcodegen
 brew install xcbeautify    # 可选，用于美化构建日志
 brew install ios-deploy    # 仅 `make run_device` 需要（或 npm install -g ios-deploy）
+gem install bundler        # 仅 `make screenshots` 需要（首次会自动 bundle install fastlane）
 ```
 
 ### 常用命令
@@ -45,6 +46,9 @@ brew install ios-deploy    # 仅 `make run_device` 需要（或 npm install -g i
 | `make logs` | 实时跟踪 App 日志 |
 | `make stop` | 终止模拟器中的 App |
 | `make clean` | 清理 `build/` 目录 |
+| `make screenshots` | 使用 fastlane snapshot 在模拟器中自动生成 App Store 截图（输出 `fastlane/screenshots/<lang>/*.png`） |
+| `make market` | 启动本地 HTTP 预览 `marketing/` 页面；加 `SNAPSHOT=1` 先重跑截图 |
+| `make deps` | 检查 xcodegen / xcbeautify 等可选依赖 |
 | `make help` | 查看全部命令 |
 
 ### 覆盖默认值
@@ -64,6 +68,20 @@ DEVELOPMENT_TEAM=XXXXXXXXXX make gen
 
 - **Team 自动注入**：`make gen` 会从 Xcode 的 `IDEProvisioningTeams` 偏好里自动挑选付费 Team（跳过 `Personal Team`），写进 `project.pbxproj`。再也不会出现 Xcode GUI 里 Team 为 `None` 导致签名失败的问题。
 - **Metal API / Shader Validation**：生成 scheme 后自动改写 `<LaunchAction>`，把两项 Metal Validation 都置为 Disabled（避免在 "Designed for iPhone on Mac" 下 Vision 的 shared-storage 纹理触发 `synchronizeResource` 断言崩溃）。
+
+### 自动生成 App Store 截图
+
+```bash
+make screenshots
+# 指定机型：
+SNAPSHOT_DEVICE="iPhone 16 Pro Max" make screenshots
+# 需要 xcresult 排查时：
+SNAPSHOT_RESULT_BUNDLE=1 make screenshots
+```
+
+- 由 `MyBodyUITests/SnapshotScreenshotsUITests.swift` 依次切换「首页 / 趋势 / 设置」Tab 完成截图。
+- UI 测试通过启动参数 `-UITestScreenshots 1` 让 App 注入示例 `InBodyRecord`（`MyBody/Utilities/ScreenshotSampleData.swift`），保证首页和趋势页有真实的数据曲线。
+- 产物路径：`fastlane/screenshots/zh-Hans/*.png`；`make market` 会自动把它们复制到 `marketing/screenshots/` 以供本地预览。
 
 ## 项目结构
 

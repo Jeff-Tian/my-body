@@ -1,0 +1,55 @@
+# Dynamically detect an available iPhone Pro Max / Pro simulator so we don't
+# break when Xcode ships new device names. Capture the UDID so we can look up
+# the exact OS version xcodebuild expects below.
+snapshot_device = ENV['SNAPSHOT_DEVICE'] if ENV['SNAPSHOT_DEVICE'] && !ENV['SNAPSHOT_DEVICE'].empty?
+snapshot_udid = nil
+if snapshot_device.nil?
+  available = `xcrun simctl list devices available 2>/dev/null`.lines.map(&:strip)
+  iphone_devices = available.select { |l| l =~ /^iPhone.*\([-A-F0-9]+\)/i }
+  picked = iphone_devices.reverse.find { |l| l =~ /Pro Max/i } ||
+           iphone_devices.reverse.find { |l| l =~ /Pro/i } ||
+           iphone_devices.last
+  if picked
+    snapshot_device = picked.sub(/\s*\([-A-F0-9]+\).*/, '')
+    snapshot_udid = picked[/\(([-A-F0-9]+)\)/, 1]
+  else
+    snapshot_device = 'iPhone 16 Pro Max'
+  end
+end
+devices([snapshot_device])
+
+# Detect the exact OS version xcodebuild expects. `simctl list devices` groups
+# runtimes by their marketing header (e.g. "-- iOS 26.4 --"), which can mismatch
+# the actual runtime build version (e.g. 26.4.1). Fastlane parses that header
+# and injects `OS=26.4` into the destination even when `ios_version` is unset,
+# causing xcodebuild to fail with "Unable to find a device matching...".
+# `xctrace list devices` reports the precise version xcodebuild accepts, and
+# includes each simulator's UDID so we can disambiguate multiple runtimes.
+begin
+  xctrace_out = `xcrun xctrace list devices 2>&1`
+  version = nil
+  if snapshot_udid
+    line = xctrace_out.lines.map(&:strip).find { |l| l.include?(snapshot_udid) }
+    version = line[/\(([\d.]+)\)\s+\([-A-F0-9]+\)\s*$/, 1] if line
+  end
+  if version.nil?
+    versions = xctrace_out.lines.map(&:strip).select do |l|
+      l =~ /^#{Regexp.escape(snapshot_device)}(?:\s+Simulator)?\s+\([\d.]+\)\s+\([-A-F0-9]+\)/i
+    end.map { |l| l[/\(([\d.]+)\)\s+\([-A-F0-9]+\)\s*$/, 1] }.compact
+    version = versions.max_by { |v| v.split('.').map(&:to_i) }
+  end
+  ios_version(version) if version
+rescue StandardError
+  # Fall back to fastlane's default detection if xctrace is unavailable.
+end
+
+# App UI is primarily Chinese; add en-US later if localized strings are added.
+languages(["zh-Hans"])
+
+scheme("MyBody")
+
+output_directory("./fastlane/screenshots")
+
+clear_previous_screenshots(true)
+
+override_status_bar(true)

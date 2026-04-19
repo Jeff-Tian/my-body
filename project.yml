@@ -11,10 +11,13 @@ schemes:
     build:
       targets:
         MyBody: all
+        MyBodyUITests: [test]
     run:
       config: Debug
     test:
       config: Debug
+      targets:
+        - MyBodyUITests
     profile:
       config: Release
     analyze:
@@ -51,3 +54,20 @@ targets:
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
         INFOPLIST_KEY_CFBundleDisplayName: "我的身体"
+
+  MyBodyUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: MyBodyUITests
+    dependencies:
+      - target: MyBody
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: brickverse.MyBodyUITests
+        DEVELOPMENT_TEAM: "${DEVELOPMENT_TEAM}"
+        CODE_SIGN_STYLE: Automatic
+        SWIFT_VERSION: "5.9"
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: MyBody

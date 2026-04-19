@@ -21,9 +21,12 @@ struct HistoryListView: View {
                     .font(.subheadline)
                     .padding(.horizontal)
             } else {
-                ForEach(records, id: \.id) { record in
+                ForEach(Array(records.enumerated()), id: \.element.id) { index, record in
                     NavigationLink(destination: DetailView(record: record)) {
                         HistoryRow(record: record)
+                            .contentShape(Rectangle())
+                            .accessibilityIdentifier("history-row-\(index)")
+                            .accessibilityAddTraits(.isButton)
                     }
                     .buttonStyle(.plain)
                     .contextMenu {

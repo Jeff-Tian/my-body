@@ -291,6 +291,25 @@ deps:
 		printf "$(YELLOW)（可选）日志美化：brew install xcbeautify$(NC)\n"; \
 	fi
 
+## screenshots: 使用 fastlane snapshot 在模拟器中自动生成 App Store 截图
+##   用法：
+##     make screenshots                              # 使用默认模拟器
+##     SNAPSHOT_DEVICE="iPhone 16 Pro Max" make screenshots
+##     SNAPSHOT_RESULT_BUNDLE=1 make screenshots     # 生成 xcresult 便于排查
+##   产物位于 fastlane/screenshots/<lang>/*.png
+.PHONY: screenshots
+screenshots: gen
+	@set -euo pipefail; \
+	if ! command -v bundle >/dev/null 2>&1; then \
+		printf "$(YELLOW)[screenshots] 未安装 bundler：gem install bundler$(NC)\n"; exit 70; \
+	fi; \
+	if [ ! -f Gemfile.lock ]; then \
+		printf "$(GREEN)[screenshots] 首次运行，执行 bundle install…$(NC)\n"; \
+		bundle install; \
+	fi; \
+	printf "$(GREEN)[screenshots] 启动 fastlane snapshot…$(NC)\n"; \
+	bundle exec fastlane screenshots
+
 ## market: 启动本地 HTTP 服务器预览 marketing 页面（SNAPSHOT=1 可先用 fastlane 生成截图）
 ##   用法：
 ##     make market                 # 直接启动预览（使用 marketing/screenshots 已有图片）

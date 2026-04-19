@@ -1,0 +1,31 @@
+opt_out_usage
+
+# Correct FastlaneCore::DeviceManager's os_version values on runtimes where
+# `simctl list devices` reports a different version than xcodebuild accepts
+# (e.g. simctl header "26.4" vs. runtime "26.4.1"). Must load before any
+# snapshot action runs.
+require_relative 'device_os_version_patch'
+
+default_platform(:ios)
+
+platform :ios do
+  desc "Generate localized app screenshots via UI tests"
+  lane :screenshots do
+    derived_data_path = File.expand_path('../build/DerivedDataSnapshot', __dir__)
+    only_testing = 'MyBodyUITests/SnapshotScreenshotsUITests/testGenerateScreenshots'
+
+    capture_screenshots(
+      scheme: 'MyBody',
+      project: 'MyBody.xcodeproj',
+      clean: false,
+      skip_open_summary: true,
+      only_testing: only_testing,
+      derived_data_path: derived_data_path,
+      erase_simulator: false,
+      reinstall_app: true,
+      concurrent_simulators: false,
+      result_bundle: ENV['SNAPSHOT_RESULT_BUNDLE'].to_s == '1',
+      output_simulator_logs: ENV['SNAPSHOT_SIM_LOGS'].to_s == '1'
+    )
+  end
+end
