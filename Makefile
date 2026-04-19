@@ -49,6 +49,18 @@ gen:
 		echo "[gen] ⚠️  未检测到开发者 Team，字段将留空（模拟器构建不受影响）"; \
 	fi; \
 	DEVELOPMENT_TEAM=$$TEAM xcodegen generate
+	@# 若 AppIcon 尚未生成实际图像文件,就按品牌风格自动出一张 1024×1024 PNG,
+	@# 避免 `altool` 在上传阶段报 90022 "Missing required icon file"。
+	@if [ ! -f MyBody/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png ]; then \
+		if command -v python3 >/dev/null 2>&1 && python3 -c "import PIL" >/dev/null 2>&1; then \
+			echo "[gen] 生成 App Icon (1024×1024)…"; \
+			python3 scripts/generate_app_icon.py; \
+		else \
+			printf "$(YELLOW)[gen] ⚠️  未安装 Pillow,跳过 App Icon 生成。手动生成:$(NC)\n"; \
+			printf "$(YELLOW)         python3 -m pip install --user --break-system-packages Pillow && \\\\\n"; \
+			printf "         python3 scripts/generate_app_icon.py$(NC)\n"; \
+		fi; \
+	fi
 	@# 反勾 Metal 全部 4 项诊断(API Validation / Shader Validation /
 	@# Show & Log Graphics Overview)。在 "Designed for iPhone on Mac" 上,
 	@# Vision 使用 shared-storage Metal 纹理会触发 synchronizeResource 断言崩溃,

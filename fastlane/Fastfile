@@ -211,20 +211,23 @@ platform :ios do
     unless skip_binary
       # 让每次 release 的 build number 都唯一,避免 ASC 报
       # "The build number ... has already been used" 错误。
-      increment_build_number_in_xcodeproj(
-        xcodeproj: '../MyBody.xcodeproj',
-        build_number: Time.now.strftime('%Y%m%d%H%M')
-      ) unless ENV['SKIP_BUMP_BUILD'].to_s == '1'
+      # 直接用 xcargs 把 CURRENT_PROJECT_VERSION 注入构建,无需改动 pbxproj,
+      # 也就避开了 agvtool / increment_build_number_in_xcodeproj 对
+      # VERSIONING_SYSTEM 的额外要求。
+      build_number = ENV['SKIP_BUMP_BUILD'].to_s == '1' ? nil : Time.now.strftime('%Y%m%d%H%M')
+      xcargs = ['-allowProvisioningUpdates']
+      xcargs << "CURRENT_PROJECT_VERSION=#{build_number}" if build_number
+      UI.message("[release] 本次 build number = #{build_number || '(保留 pbxproj 里的值)'}")
 
       build_app(
         scheme: 'MyBody',
-        project: '../MyBody.xcodeproj',
+        project: 'MyBody.xcodeproj',
         configuration: 'Release',
         clean: true,
         output_directory: File.expand_path('../build/ipa', __dir__),
         output_name: 'MyBody.ipa',
         export_method: 'app-store',
-        xcargs: '-allowProvisioningUpdates',
+        xcargs: xcargs.join(' '),
         export_options: {
           method: 'app-store',
           signingStyle: 'automatic',
@@ -280,7 +283,7 @@ platform :ios do
   def app_marketing_version
     ENV['APP_VERSION'] || begin
       v = get_version_number_from_xcodeproj(
-        xcodeproj: '../MyBody.xcodeproj',
+        xcodeproj: 'MyBody.xcodeproj',
         target: 'MyBody'
       )
       (v.nil? || v.empty?) ? '1.0' : v
@@ -322,8 +325,8 @@ platform :ios do
       editable.create_app_store_review_detail(attributes: {
         contact_first_name: 'Release',
         contact_last_name:  'Bot',
-        contact_email:      (ENV['ASC_REVIEW_CONTACT_EMAIL'] || 'release@example.com'),
-        contact_phone:      (ENV['ASC_REVIEW_CONTACT_PHONE'] || '+1 4155551234'),
+        contact_email:      (ENV['ASC_REVIEW_CONTACT_EMAIL'] || 'jeff.tian@outlook.com'),
+        contact_phone:      (ENV['ASC_REVIEW_CONTACT_PHONE'] || ''),
         demo_account_required: false,
         notes: 'Auto-created by make release. Update in ASC → App Review Information.'
       })

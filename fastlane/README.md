@@ -47,6 +47,14 @@ Ensure Bundle ID exists on Developer Portal (idempotent, via ASC API)
 
 Ensure an App record exists on App Store Connect (idempotent)
 
+### ios release
+
+```sh
+[bundle exec] fastlane ios release
+```
+
+一键发版:构建 IPA → 上传二进制 + 元数据 + 截图 → 提交审核 → 自动发布
+
 ----
 
 This README.md is auto-generated and will be re-generated every time [_fastlane_](https://fastlane.tools) is run.
