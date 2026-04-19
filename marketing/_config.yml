@@ -1,0 +1,10 @@
+# GitHub Pages Jekyll 配置
+include:
+  - .well-known
+  - apple-app-site-association
+
+exclude:
+  - Gemfile
+  - Gemfile.lock
+  - node_modules
+  - vendor

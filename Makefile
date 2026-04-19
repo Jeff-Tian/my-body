@@ -290,3 +290,29 @@ deps:
 	@if ! command -v xcbeautify >/dev/null 2>&1 && ! command -v xcpretty >/dev/null 2>&1; then \
 		printf "$(YELLOW)（可选）日志美化：brew install xcbeautify$(NC)\n"; \
 	fi
+
+## market: 启动本地 HTTP 服务器预览 marketing 页面（SNAPSHOT=1 可先用 fastlane 生成截图）
+##   用法：
+##     make market                 # 直接启动预览（使用 marketing/screenshots 已有图片）
+##     make market SNAPSHOT=1      # 先运行 fastlane snapshot 重新生成截图再预览
+##     make market PORT=8080       # 指定端口
+.PHONY: market
+market:
+ifeq ($(SNAPSHOT),1)
+	@printf "$(GREEN)[market] 生成截图...$(NC)\n"
+	@if ! command -v bundle >/dev/null 2>&1; then \
+		printf "$(YELLOW)未安装 bundler/fastlane，跳过截图生成。安装：gem install bundler && bundle install$(NC)\n"; \
+	else \
+		SNAPSHOT_DEVICE=$$(xcrun simctl list devices available | grep -E 'iPhone.*Pro Max' | tail -1 | sed -E 's/^ *//; s/ \(.*//' || echo "iPhone 16 Pro Max"); \
+		printf "$(YELLOW)[market] 使用模拟器: $$SNAPSHOT_DEVICE$(NC)\n"; \
+		SNAPSHOT_DEVICE="$$SNAPSHOT_DEVICE" bundle exec fastlane snapshot 2>&1 \
+			|| printf "$(YELLOW)[market] 截图生成失败，改用 marketing/screenshots 中已有图片$(NC)\n"; \
+	fi
+endif
+	@mkdir -p marketing/screenshots
+	@bash scripts/copy_screenshots.sh || true
+	@PORT=$${PORT:-8000}; \
+	printf "$(GREEN)[market] 启动本地预览服务器...$(NC)\n"; \
+	printf "$(YELLOW)[market] 访问地址: http://localhost:$$PORT/$(NC)\n"; \
+	printf "$(YELLOW)[market] 按 Ctrl+C 停止服务器$(NC)\n\n"; \
+	cd marketing && (python3 -m http.server $$PORT || python -m SimpleHTTPServer $$PORT)
