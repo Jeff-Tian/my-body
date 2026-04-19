@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>支持 - 我的身体 MyBody</title>
+  <meta name="description" content="《我的身体》iOS App 支持页面：联系开发者、获取 InBody 报告扫描、相册权限、趋势图表等使用帮助。" />
+  <link rel="stylesheet" href="../style.css" />
+  <style>
+    .support-layout {
+      max-width: 980px;
+      margin: 0 auto;
+      padding: 0 1.5rem 4rem;
+    }
+
+    .support-intro {
+      max-width: 760px;
+      margin: 0 auto 2rem;
+      text-align: center;
+      color: var(--muted);
+      line-height: 1.75;
+      font-size: .98rem;
+    }
+
+    .support-grid {
+      display: grid;
+      gap: 1.5rem;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      margin-top: 2rem;
+    }
+
+    .support-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 1.2rem;
+      padding: 1.4rem;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, .04);
+    }
+
+    .support-card h2 {
+      margin: 0 0 .8rem;
+      font-size: 1.08rem;
+      color: var(--text);
+    }
+
+    .support-card p,
+    .support-card li {
+      color: var(--muted);
+      line-height: 1.7;
+      font-size: .92rem;
+    }
+
+    .support-card ul {
+      margin: .7rem 0 0;
+      padding-left: 1.15rem;
+    }
+
+    .support-panel {
+      margin-top: 2rem;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 1.4rem;
+      padding: 1.8rem;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, .04);
+    }
+
+    .support-panel h2 {
+      margin-top: 0;
+      margin-bottom: .7rem;
+    }
+
+    .support-panel p,
+    .support-panel li {
+      color: var(--muted);
+      line-height: 1.75;
+      font-size: .95rem;
+    }
+
+    .support-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .9rem;
+      margin-top: 1rem;
+    }
+
+    .support-meta {
+      margin-top: 1rem;
+      font-size: .82rem;
+      color: var(--muted);
+    }
+
+    .back-link {
+      display: inline-block;
+      margin: 1rem 0;
+      color: var(--primary);
+      text-decoration: none;
+      font-weight: 600;
+    }
+  </style>
+</head>
+
+<body>
+  <header>
+    <div class="hero-inner">
+      <div class="lang-switch"><span class="lang-active">中文</span></div>
+      <span class="badge">Support</span>
+      <h1>我的身体 支持</h1>
+      <p class="subtitle">联系开发者、获取 InBody 报告扫描与相册权限使用帮助，或反馈识别异常。</p>
+    </div>
+  </header>
+
+  <main>
+    <section class="support-layout">
+      <p class="support-intro">这是《我的身体》（MyBody）的官方支持页面。如果你在使用过程中遇到问题，请优先通过邮件或 GitHub Issue 联系我们，并附上设备型号、系统版本、App 版本、问题截图和复现步骤，以便更快地定位。</p>
+
+      <div class="support-actions" style="justify-content:center;">
+        <a class="btn" href="mailto:jie.tian@hotmail.com?subject=%E6%88%91%E7%9A%84%E8%BA%AB%E4%BD%93%20MyBody%20Support">联系支持</a>
+        <a class="btn secondary" href="https://github.com/Jeff-Tian/my-body/issues" target="_blank" rel="noopener">提交 GitHub Issue</a>
+        <a class="btn secondary" href="../privacy/">查看隐私政策</a>
+        <a class="btn secondary" href="../">返回首页</a>
+      </div>
+
+      <div class="support-grid">
+        <article class="support-card">
+          <h2>联系方式</h2>
+          <p>支持邮箱：<a class="inline" href="mailto:jie.tian@hotmail.com">jie.tian@hotmail.com</a></p>
+          <p>GitHub：<a class="inline" href="https://github.com/Jeff-Tian/my-body" target="_blank" rel="noopener">Jeff-Tian/my-body</a></p>
+          <p>我们通常会在 3 个工作日内回复。App Store 审核补充材料也可以通过该邮箱发送。</p>
+        </article>
+
+        <article class="support-card">
+          <h2>常见支持范围</h2>
+          <ul>
+            <li>InBody 报告图片的识别与字段抽取</li>
+            <li>相册、相机、iCloud 照片下载权限</li>
+            <li>SwiftData 本地存储与数据备份</li>
+            <li>Swift Charts 趋势图与参考范围显示</li>
+          </ul>
+        </article>
+
+        <article class="support-card">
+          <h2>提交问题时请附上</h2>
+          <ul>
+            <li>设备型号与 iOS / iPadOS 版本</li>
+            <li>App 版本号（设置页或 TestFlight 显示）</li>
+            <li>问题出现前后的操作步骤</li>
+            <li>InBody 报告截图（可打码）或错误提示</li>
+          </ul>
+        </article>
+      </div>
+
+      <div class="support-panel">
+        <h2>使用说明</h2>
+        <p>《我的身体》是一款完全本地化的 InBody 体脂报告追踪工具。所有识别与存储都在你的设备上完成，不会上传数据到任何服务器。</p>
+        <ul>
+          <li>如果无法识别 InBody 报告，请确认图片清晰、文字完整未被裁切，并尽量在光线均匀的环境下拍摄。</li>
+          <li>如果扫描时找不到照片，请前往系统「设置 → 隐私与安全性 → 照片」为本 App 开启完整或所选照片访问权限。</li>
+          <li>如果使用 iCloud 照片图库，请确保网络正常以便按需下载尚未缓存到本地的原图。</li>
+          <li>如果趋势图表为空，请至少录入两条以上记录后再查看。</li>
+          <li>所有数据仅保存在设备本地（以及 Apple 账户自动管理的 iCloud 备份范围内），卸载 App 将随之移除，请提前备份重要记录。</li>
+        </ul>
+        <p class="support-meta">Support URL for App Store Connect: https://jeff-tian.github.io/my-body/support/</p>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p>© <span id="year"></span> 我的身体 / MyBody. Made with SwiftUI.</p>
+    <p class="footer-links">
+      <a class="inline" href="../">首页</a>
+      <span aria-hidden="true">·</span>
+      <a class="inline" href="../privacy/">隐私政策</a>
+      <span aria-hidden="true">·</span>
+      <a class="inline" href="https://github.com/Jeff-Tian/my-body" target="_blank" rel="noopener">GitHub</a>
+    </p>
+  </footer>
+  <script>document.getElementById('year').textContent = new Date().getFullYear();</script>
+</body>
+
+</html>

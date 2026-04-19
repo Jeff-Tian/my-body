@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>我的身体 - 极简 InBody 报告追踪</title>
+  <meta name="description" content="我的身体是一款极简 iOS 健康 App，扫描 InBody 体脂仪报告图片即可自动识别，使用 SwiftData 本地保存，Swift Charts 展示体重、体脂、肌肉量等趋势。" />
+  <meta name="keywords" content="我的身体, InBody, 体脂, 健康记录, Vision OCR, SwiftData, iOS, 健康 App" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+
+<body>
+  <header>
+    <div class="hero-inner">
+      <div class="lang-switch"><span class="lang-active">中文</span></div>
+      <span class="badge">健康记录</span>
+      <h1>我的身体<br />MyBody</h1>
+      <p class="subtitle">扫描 InBody 报告，自动识别、本地保存、图表化追踪你的身体变化。</p>
+      <div class="cta-group">
+        <a class="btn" href="https://github.com/Jeff-Tian/my-body" target="_blank" rel="noopener">查看源码</a>
+        <a class="btn secondary" href="#features">了解功能</a>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section id="features">
+      <div class="features-grid">
+        <div class="feature-card">
+          <div class="icon-bubble">📸</div>
+          <h3>相册 OCR 识别</h3>
+          <p>从相册选择 InBody 体脂仪的报告图片，使用 Vision 自动识别体重、体脂率、肌肉量等关键指标。</p>
+        </div>
+        <div class="feature-card">
+          <div class="icon-bubble">💾</div>
+          <h3>SwiftData 本地持久化</h3>
+          <p>数据完全存储在本地，不上传、不登录、不联网，隐私零泄漏。</p>
+        </div>
+        <div class="feature-card">
+          <div class="icon-bubble">📈</div>
+          <h3>Swift Charts 趋势</h3>
+          <p>体重、体脂率、骨骼肌、BMI 一图看懂，自动对照 InBody 标准范围。</p>
+        </div>
+        <div class="feature-card">
+          <div class="icon-bubble">🎯</div>
+          <h3>参考范围对照</h3>
+          <p>内置 InBody 报告各项指标的推荐范围，一眼看出哪些在正常区间。</p>
+        </div>
+        <div class="feature-card">
+          <div class="icon-bubble">🎨</div>
+          <h3>绿色健康风格</h3>
+          <p>SwiftUI 原生 UI，绿色 / 白色配色，干净、轻盈、专注于数据本身。</p>
+        </div>
+        <div class="feature-card">
+          <div class="icon-bubble">🌏</div>
+          <h3>完全中文</h3>
+          <p>针对中文 InBody 报告优化的识别与界面文案，无需额外设置。</p>
+        </div>
+      </div>
+
+      <div class="showcase">
+        <div class="mock">
+          <div class="screen">
+            <img src="screenshots/01-home.png" alt="首页概览" loading="lazy" />
+          </div>
+        </div>
+        <ul class="steps">
+          <li>
+            <div class="step-index">01</div>
+            <div>
+              <h4>拍下或保存报告</h4>
+              <p>体脂仪打印出 InBody 报告后拍照保存到相册即可。</p>
+            </div>
+          </li>
+          <li>
+            <div class="step-index">02</div>
+            <div>
+              <h4>选图一键识别</h4>
+              <p>App 内选择图片，Vision OCR 自动抽取关键数值，无需手动输入。</p>
+            </div>
+          </li>
+          <li>
+            <div class="step-index">03</div>
+            <div>
+              <h4>查看趋势变化</h4>
+              <p>多次记录后，Swift Charts 会展示体重、体脂、肌肉量等指标的长期变化。</p>
+            </div>
+          </li>
+        </ul>
+      </div>
+
+      <div class="screenshot-gallery">
+        <div class="screenshot-thumb">
+          <img src="screenshots/01-home.png" alt="首页" loading="lazy" />
+          <div class="thumb-label">首页概览</div>
+        </div>
+        <div class="screenshot-thumb">
+          <img src="screenshots/02-trends.png" alt="趋势" loading="lazy" />
+          <div class="thumb-label">趋势图表</div>
+        </div>
+        <div class="screenshot-thumb">
+          <img src="screenshots/03-detail.png" alt="详情" loading="lazy" />
+          <div class="thumb-label">记录详情</div>
+        </div>
+        <div class="screenshot-thumb">
+          <img src="screenshots/04-settings.png" alt="设置" loading="lazy" />
+          <div class="thumb-label">设置偏好</div>
+        </div>
+      </div>
+
+      <div class="download-strip">
+        <div class="inner">
+          <div>
+            <h2>开源 · 零依赖 · 全本地</h2>
+            <p style="max-width:460px;color:var(--muted);margin-top:.6rem;font-size:.9rem">
+              代码开源、数据离线、界面简洁。欢迎在 GitHub 上查看源码或提 issue。
+            </p>
+          </div>
+          <a class="btn" href="https://github.com/Jeff-Tian/my-body" target="_blank" rel="noopener">GitHub 仓库</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p>© <span id="year"></span> 我的身体 / MyBody. Made with SwiftUI.</p>
+    <p class="footer-links">
+      <a class="inline" href="privacy/">隐私政策</a>
+      <span aria-hidden="true">·</span>
+      <a class="inline" href="support/">支持</a>
+      <span aria-hidden="true">·</span>
+      <a class="inline" href="https://github.com/Jeff-Tian/my-body" target="_blank" rel="noopener">GitHub</a>
+    </p>
+  </footer>
+
+  <script>document.getElementById('year').textContent = new Date().getFullYear();</script>
+</body>
+
+</html>
