@@ -27,7 +27,8 @@ make run
 
 ```bash
 brew install xcodegen
-brew install xcbeautify   # 可选，用于美化构建日志
+brew install xcbeautify    # 可选，用于美化构建日志
+brew install ios-deploy    # 仅 `make run_device` 需要（或 npm install -g ios-deploy）
 ```
 
 ### 常用命令
@@ -35,6 +36,7 @@ brew install xcbeautify   # 可选，用于美化构建日志
 | 命令 | 说明 |
 |---|---|
 | `make run` | 生成工程 → 构建 → 启动模拟器 → 安装 → 运行 |
+| `make run_device` | 在连接的真实 iPhone 上构建 → 安装 → 启动（自动解析 Team 与 UDID） |
 | `make run-mac` | 以 "My Mac (Designed for iPhone)" 模式构建，并通过 Xcode 启动（Team/Metal Validation 已自动处理）|
 | `make xcode` | 生成工程并在 Xcode 中打开（Team 已预填，直接 Cmd+R） |
 | `make build` | 仅构建（模拟器） |
@@ -52,6 +54,9 @@ make run SIMULATOR_DEVICE="iPhone 15 Pro"
 make run CONFIG=Release
 
 # 如果自动解析的 Team ID 不对，可手动指定：
+
+# 真机运行时手动指定设备 UDID（多台设备同时连接时）：
+UDID=00008120-xxxxxxxxxxxxxxxx make run_device
 DEVELOPMENT_TEAM=XXXXXXXXXX make gen
 ```
 
