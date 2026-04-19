@@ -1,0 +1,13 @@
+本 App 全程离线,无账号系统,无需登录或演示账户即可体验完整功能。
+
+使用步骤:
+1. 首次启动后,点击「扫描 InBody 报告」按钮。
+2. 授权相册访问,App 仅用于选取用户指定的 InBody 图片。
+3. 选择任意 InBody 体脂仪报告图片,App 将通过 Vision OCR 自动识别数据。
+4. 识别完成后会录入「趋势」页,在本地数据库查看历史记录。
+
+隐私:
+- 所有数据通过 SwiftData 保存在设备本地,不上传任何服务器。
+- 无 Analytics / 追踪 SDK。
+
+Auto-created by make release. Update in ASC → App Review Information.

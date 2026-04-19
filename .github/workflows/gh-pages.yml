@@ -85,7 +85,3 @@ jobs:
       - name: Display deployment URL
         run: |
           echo "🚀 Deployed to: https://jeff-tian.github.io/my-body/"
-
-    environment:
-      name: github-pages
-      url: https://jeff-tian.github.io/my-body/

@@ -144,7 +144,7 @@ platform :ios do
 
     if existing
       UI.success("App 已存在于 ASC，跳过创建：#{APP_IDENTIFIER} (id=#{existing.id})")
-      ensure_draft_version(existing)
+      ensure_draft_version(existing, version: app_marketing_version)
       next existing
     end
 
@@ -177,12 +177,122 @@ platform :ios do
       app_identifier: APP_IDENTIFIER,
       app_name: APP_NAME,
       language: PRIMARY_LANG,
-      app_version: '1.0',
+      app_version: app_marketing_version,
       sku: APP_SKU,
       platform: 'ios',
       skip_itc: false,
       skip_devcenter: true          # Bundle ID 已由 register_bundle_id 注册过
     )
+  end
+
+  desc "一键发版:构建 IPA → 上传二进制 + 元数据 + 截图 → 提交审核 → 自动发布"
+  lane :release do
+    ensure_app_on_asc
+
+    metadata_dir    = File.expand_path('metadata', __dir__)
+    screenshots_dir = File.expand_path('screenshots', __dir__)
+
+    if Dir.exist?(screenshots_dir)
+      %w[test_output].each do |bad|
+        path = File.join(screenshots_dir, bad)
+        FileUtils.rm_rf(path) if Dir.exist?(path)
+      end
+    end
+
+    skip_metadata    = ENV['SKIP_METADATA'].to_s == '1' || !Dir.exist?(metadata_dir)
+    skip_screenshots = ENV['SKIP_SCREENSHOTS'].to_s == '1' || !Dir.exist?(screenshots_dir)
+    skip_binary      = ENV['SKIP_BINARY'].to_s == '1'
+    skip_submit      = ENV['SKIP_SUBMIT'].to_s == '1'
+    automatic        = ENV['MANUAL_RELEASE'].to_s != '1'
+
+    # 1) 构建 + 上传二进制(默认开,SKIP_BINARY=1 可跳过用于调试)
+    #    采用「build_app → upload_to_testflight」两步:pilot 会等待
+    #    App Store Connect 完成处理,确保后续 submit_for_review 能找到可用的 build。
+    unless skip_binary
+      # 让每次 release 的 build number 都唯一,避免 ASC 报
+      # "The build number ... has already been used" 错误。
+      increment_build_number_in_xcodeproj(
+        xcodeproj: '../MyBody.xcodeproj',
+        build_number: Time.now.strftime('%Y%m%d%H%M')
+      ) unless ENV['SKIP_BUMP_BUILD'].to_s == '1'
+
+      build_app(
+        scheme: 'MyBody',
+        project: '../MyBody.xcodeproj',
+        configuration: 'Release',
+        clean: true,
+        output_directory: File.expand_path('../build/ipa', __dir__),
+        output_name: 'MyBody.ipa',
+        export_method: 'app-store',
+        xcargs: '-allowProvisioningUpdates',
+        export_options: {
+          method: 'app-store',
+          signingStyle: 'automatic',
+          uploadBitcode: false,
+          uploadSymbols: true
+        }
+      )
+
+      upload_to_testflight(
+        app_identifier: APP_IDENTIFIER,
+        skip_submission: true,                    # 不提交 TF 外测,仅上传
+        skip_waiting_for_build_processing: false, # 等 ASC 处理完,拿到可供审核的 build
+        changelog: read_release_notes(metadata_dir)
+      )
+    end
+
+    # 2) 推送元数据 + 截图,并按需一口气提交审核 + 自动发布
+    upload_to_app_store(
+      app_identifier: APP_IDENTIFIER,
+      skip_binary_upload: true,       # 二进制已由 upload_to_testflight 传好
+      skip_metadata: skip_metadata,
+      skip_screenshots: skip_screenshots,
+      overwrite_screenshots: true,
+      force: true,
+      run_precheck_before_submit: false,
+      precheck_include_in_app_purchases: false,
+      submit_for_review: !skip_submit,
+      automatic_release: automatic,
+      phased_release: false,
+      reject_if_possible: true,        # 已有审核中的版本则先拒绝再覆盖
+      metadata_path: metadata_dir,
+      screenshots_path: screenshots_dir,
+      ignore_language_directory_validation: true,
+      submission_information: {
+        add_id_info_uses_idfa: false,
+        export_compliance_uses_encryption: false,
+        export_compliance_encryption_updated: false,
+        content_rights_contains_third_party_content: false,
+        content_rights_has_rights: true
+      }
+    )
+
+    summary = []
+    summary << (skip_binary   ? "  • 二进制:⏭  跳过 (SKIP_BINARY=1)"        : "  • 二进制:✅ 已构建并上传")
+    summary << (skip_metadata ? "  • 文案  :⏭  跳过"                        : "  • 文案  :✅ 已推送")
+    summary << (skip_screenshots ? "  • 截图  :⏭  跳过"                     : "  • 截图  :✅ 已推送")
+    summary << (skip_submit   ? "  • 提审  :⏭  未提交 (SKIP_SUBMIT=1)"       : "  • 提审  :✅ 已提交")
+    summary << (skip_submit ? "" : (automatic ? "  • 发布  :🚀 审核通过后自动发布" : "  • 发布  :✋ 手动发布 (MANUAL_RELEASE=1)"))
+    UI.success("发版流程结束:\n" + summary.reject(&:empty?).join("\n"))
+  end
+
+  # 从项目 pbxproj 读取 MARKETING_VERSION,作为 ASC 上的 app_version。
+  def app_marketing_version
+    ENV['APP_VERSION'] || begin
+      v = get_version_number_from_xcodeproj(
+        xcodeproj: '../MyBody.xcodeproj',
+        target: 'MyBody'
+      )
+      (v.nil? || v.empty?) ? '1.0' : v
+    rescue
+      '1.0'
+    end
+  end
+
+  # 读取 zh-Hans 的 release_notes 作为 TestFlight changelog,失败则给兜底。
+  def read_release_notes(metadata_dir)
+    path = File.join(metadata_dir, 'zh-Hans', 'release_notes.txt')
+    File.exist?(path) ? File.read(path).strip : 'New release'
   end
 
   # 确保 App 有一个可编辑的草稿版本（PREPARE_FOR_SUBMISSION 等状态）。
@@ -191,7 +301,7 @@ platform :ios do
   def ensure_draft_version(app, version: '1.0')
     editable = app.get_edit_app_store_version(platform: Spaceship::ConnectAPI::Platform::IOS)
     if editable
-      UI.success("已有可编辑版本：v#{editable.version_string} (#{editable.app_store_state})")
+      UI.success("已有可编辑版本:v#{editable.version_string} (#{editable.app_store_state})")
     else
       UI.message("App 无可编辑版本 → 创建 v#{version} 草稿…")
       editable = Spaceship::ConnectAPI::AppStoreVersion.create(

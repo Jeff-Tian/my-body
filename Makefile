@@ -531,15 +531,31 @@ screenshots_if_stale:
 	fi; \
 	printf "$(GREEN)[screenshots_if_stale] ✅ 截图新鲜 (最新 $${age_hr}h 前)，跳过重拍$(NC)\n"
 
-## release: 一键发版 → 按需生成截图 → 上传元数据 + 截图到 ASC
-##   FORCE_SNAPSHOT=1 强制重拍截图
-##   SKIP_SNAPSHOT=1  无条件跳过截图
-##   SNAPSHOT_MAX_AGE=24  截图新鲜度阈值（小时）
+## release: 一键发版 → 按需生成截图 → 构建 IPA → 上传二进制 + 元数据 + 截图 → 提审 → 自动发布
+##   FORCE_SNAPSHOT=1      强制重拍截图
+##   SKIP_SNAPSHOT=1       无条件跳过截图
+##   SNAPSHOT_MAX_AGE=24   截图新鲜度阈值(小时)
+##   SKIP_BINARY=1         不构建 / 不上传二进制(仅推文案 + 截图,不能提审)
+##   SKIP_METADATA=1       不上传 App 文案
+##   SKIP_SCREENSHOTS=1    不上传截图
+##   SKIP_SUBMIT=1         上传完就停,不提交审核 / 不发布
+##   MANUAL_RELEASE=1      审核通过后不自动发布,改为手动发布
 .PHONY: release
-release: check_asc_env check_app_exists update_fastlane
+release: check_asc_env check_app_exists update_fastlane gen
+	@printf "$(GREEN)==> [1/3] 检查 / 生成 App Store 截图$(NC)\n"
+	@$(MAKE) screenshots_if_stale
+	@printf "$(GREEN)==> [2/3] bundle install(首次会安装 fastlane)$(NC)\n"
+	@if [ ! -f Gemfile.lock ]; then bundle install; fi
+	@printf "$(GREEN)==> [3/3] fastlane release:构建 → 上传 → 提审 → 发布$(NC)\n"
+	@bundle exec fastlane release
+	@printf "$(GREEN)🎉 发版流程已全部提交,审核通过后将按设置自动发布。$(NC)\n"
+
+## release_metadata_only: 仅上传元数据 + 截图,不构建 / 不提审(等同旧版 release 行为)
+.PHONY: release_metadata_only
+release_metadata_only: check_asc_env check_app_exists update_fastlane
 	@printf "$(GREEN)==> [1/2] 检查 / 生成 App Store 截图$(NC)\n"
 	@$(MAKE) screenshots_if_stale
 	@printf "$(GREEN)==> [2/2] 上传元数据 + 截图到 App Store Connect$(NC)\n"
 	@$(MAKE) push_metadata
-	@printf "$(GREEN)🎉 发版完成（仅元数据 + 截图，未上传二进制）$(NC)\n"
+	@printf "$(GREEN)✅ 仅元数据 + 截图已推送。如需完整发版:make release$(NC)\n"
 

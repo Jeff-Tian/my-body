@@ -1,0 +1,5 @@
+首发版本:
+- 📸 扫描相册中的 InBody 报告,Vision OCR 自动识别
+- 💾 SwiftData 本地持久化,完全离线
+- 📈 Swift Charts 展示体重 / 体脂 / 肌肉量趋势
+- 🎨 绿白健康风格,SwiftUI 原生体验

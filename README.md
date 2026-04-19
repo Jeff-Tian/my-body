@@ -47,7 +47,7 @@ gem install bundler        # 仅 `make screenshots` 需要（首次会自动 bun
 | `make stop` | 终止模拟器中的 App |
 | `make clean` | 清理 `build/` 目录 |
 | `make screenshots` | 使用 fastlane snapshot 在模拟器中自动生成 App Store 截图（输出 `fastlane/screenshots/<lang>/*.png`） |
-| `make release` | 生成截图 → 上传元数据 + 截图到 App Store Connect（不打包、不提审） |
+| `make release` | 一键发版:构建 IPA → 上传二进制 + 文案 + 截图 → 提审 → 审核通过后自动发布 |
 | `make market` | 启动本地 HTTP 预览 `marketing/` 页面；加 `SNAPSHOT=1` 先重跑截图 |
 | `make secrets-sync` | 读取本地 `.env`，将其中非空变量通过 `gh` CLI 同步为当前仓库的 GitHub Actions secrets（upsert，空值跳过）|
 | `make secrets-list` | 列出当前仓库已配置的 GitHub Actions secrets 名称（不显示值）|
@@ -86,36 +86,60 @@ SNAPSHOT_RESULT_BUNDLE=1 make screenshots
 - UI 测试通过启动参数 `-UITestScreenshots 1` 让 App 注入示例 `InBodyRecord`（`MyBody/Utilities/ScreenshotSampleData.swift`），保证首页和趋势页有真实的数据曲线。
 - 产物路径：`fastlane/screenshots/zh-Hans/*.png`；`make market` 会自动把它们复制到 `marketing/screenshots/` 以供本地预览。
 
-### 本地发版：上传元数据 + 截图到 App Store Connect（`make release`）
+### 本地发版：一键完成构建 + 上传 + 提审 + 自动发布（`make release`）
 
-不打包、不提审，只把 **App Store 元数据** 与 **截图** 推送到 ASC。**App 记录会用 fastlane `produce` 自动在 ASC 创建**，`.env` 由 Makefile 自动载入——所以从零开始也只需要一步：
+从零到 App Store 只需要一条命令。`make release` 会自动:
+
+- 生成 / 刷新 App Store 截图（`make screenshots`,按需重拍）
+- 在 ASC 上建 / 复用 App 记录、草稿版本、审核联系方式
+- 用 Release 配置构建 IPA（自动签名,ASC API Key 授权）
+- 上传二进制到 App Store Connect 并等待处理完成
+- 推送完整的文案、截图、分级信息与 App 审核信息
+- 提交审核 + 勾选「审核通过后自动发布」
 
 ```bash
 make release
 ```
 
-**一次性准备**（只做一次，步骤见 [docs/release.md](docs/release.md)）：
+**一次性准备**（只做一次,步骤见 [docs/release.md](docs/release.md)）:
 
-1. 在 ASC 创建 API Key（Role = App Manager），下载 `.p8` 文件
+1. 在 ASC 创建 API Key（Role = App Manager）,下载 `.p8` 文件
 2. `cp .env.example .env` 并填入 API Key 三元组
 
 之后每次发版只要 `make release`。全流程：
 
 ```
 make release
-├── check_asc_env        # 校验 API Key + .p8 路径
-├── screenshots          # fastlane snapshot 生成截图
-└── push_metadata
-    ├── ensure_app_on_asc   # produce 在 ASC 建 App（幂等）
-    └── upload_to_app_store # deliver 推文案 + 截图
+├── check_asc_env          # 校验 API Key + .p8 路径
+├── check_app_exists       # 核对 ASC 侧 App 记录
+├── update_fastlane        # 24h 内增量升级 fastlane
+├── gen                    # xcodegen 刷新 pbxproj(含 DEVELOPMENT_TEAM / Metal)
+├── screenshots_if_stale   # 必要时用 fastlane snapshot 重拍
+└── fastlane release
+    ├── ensure_app_on_asc     # produce: 建 App、建草稿版本、建审核联系人(幂等)
+    ├── increment_build_number_in_xcodeproj   # 使用时间戳 build number
+    ├── build_app             # gym: Release 配置 → app-store IPA(-allowProvisioningUpdates)
+    ├── upload_to_testflight  # pilot: 上传 IPA + 等 ASC 完成处理
+    └── upload_to_app_store   # deliver: 文案 + 截图 + 分级 + 提审 + 自动发布
 ```
 
-**可选开关：**
+**可选开关**:
 
 ```bash
-SKIP_SNAPSHOT=1 make release       # 跳过截图重跑
-SKIP_METADATA=1 make release       # 只上传截图
-SKIP_SCREENSHOTS=1 make release    # 只上传文案
+SKIP_SNAPSHOT=1    make release   # 不重拍截图
+FORCE_SNAPSHOT=1   make release   # 强制重拍截图
+SKIP_BINARY=1      make release   # 跳过构建 / 上传二进制(此时无法提审)
+SKIP_METADATA=1    make release   # 跳过文案上传
+SKIP_SCREENSHOTS=1 make release   # 跳过截图上传
+SKIP_SUBMIT=1      make release   # 传完就停,不提审 / 不发布
+MANUAL_RELEASE=1   make release   # 审核通过后改为手动发布
+SKIP_BUMP_BUILD=1  make release   # 不自动递增 build number
+```
+
+如果只想像旧版一样「只推文案 + 截图,不打包不提审」：
+
+```bash
+make release_metadata_only
 ```
 
 **多语言支持计划**详见 [docs/i18n-roadmap.md](docs/i18n-roadmap.md)。当前 Primary Language = Simplified Chinese（不可改），已铺好 String Catalog 和 `developmentLanguage` 配置，未来加英文/日文只需 4 步增量操作。
