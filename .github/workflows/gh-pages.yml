@@ -27,6 +27,9 @@ jobs:
   build-and-deploy:
     runs-on: ${{ vars.RUNS_ON || 'macos-latest' }}
     timeout-minutes: 60
+    env:
+      FASTLANE_SKIP_UPDATE_CHECK: '1'
+      FASTLANE_HIDE_CHANGELOG: '1'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -39,14 +42,11 @@ jobs:
           xcodebuild -version
           xcrun simctl list devices available | head -40
 
-      - name: Set up Ruby
-        uses: ruby/setup-ruby@v1
-        with:
-          ruby-version: '3.2'
-          bundler-cache: true
-
       - name: Install xcodegen
-        run: brew install xcodegen
+        run: |
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            brew install xcodegen
+          fi
 
       - name: Generate Xcode project
         run: xcodegen generate
@@ -54,11 +54,21 @@ jobs:
       - name: Resolve Swift packages
         run: xcodebuild -resolvePackageDependencies -project MyBody.xcodeproj -scheme MyBody
 
+      - name: Cache Ruby gems
+        uses: actions/cache@v4
+        with:
+          path: vendor/bundle
+          key: ${{ runner.os }}-gems-${{ hashFiles('Gemfile.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-gems-
+
+      - name: Install fastlane
+        run: |
+          bundle config set --local path vendor/bundle
+          bundle install --jobs 4
+
       - name: Generate screenshots via fastlane
         run: bundle exec fastlane screenshots
-        env:
-          FASTLANE_SKIP_UPDATE_CHECK: '1'
-          FASTLANE_HIDE_CHANGELOG: '1'
 
       - name: Copy screenshots into marketing site
         run: bash scripts/copy_screenshots.sh
