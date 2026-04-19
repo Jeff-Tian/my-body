@@ -52,6 +52,14 @@ fastlane/report.xml
 fastlane/Preview.html
 fastlane/screenshots/**/*.png
 fastlane/screenshots/**/*.html
+fastlane/screenshots/test_output/
 fastlane/test_output/
 .bundle/
 vendor/bundle/
+
+# Auto-generated marketing screenshots (produced by `make screenshots`)
+marketing/screenshots/*.png
+!marketing/screenshots/.gitkeep
+fastlane_output.log
+
+actions-runner/
