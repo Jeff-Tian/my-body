@@ -5,7 +5,7 @@ import SwiftData
 struct MyBodyApp: App {
     let sharedContainer: ModelContainer = {
         do {
-            let container = try ModelContainer(for: InBodyRecord.self)
+            let container = try ModelContainer(for: InBodyRecord.self, OCRCorrection.self)
             ScreenshotSampleData.seedIfNeeded(container: container)
             return container
         } catch {

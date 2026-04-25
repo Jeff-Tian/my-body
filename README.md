@@ -1,4 +1,4 @@
-# 我的身体 (MyBody)
+# 身记 (MyBody)
 
 一款极简的 iOS 健康记录 App，用来追踪 InBody 体脂仪的报告数据。
 
@@ -135,6 +135,26 @@ SKIP_SUBMIT=1      make release   # 传完就停,不提审 / 不发布
 MANUAL_RELEASE=1   make release   # 审核通过后改为手动发布
 SKIP_BUMP_BUILD=1  make release   # 不自动递增 build number
 ```
+
+#### 常用场景速查
+
+| 场景 | 怎么跑 | 说明 |
+|---|---|---|
+| **首次发版 / 日常发版** | `make release` | 全自动:刷新截图 → 构建新 build → 上传 → 提审 → 自动发布。|
+| **上一次只是 metadata / 分级 / 截图失败,二进制已上传** | `SKIP_BINARY=1 make release` | 复用 ASC 上那条处理好的 build,省掉 20 分钟左右的构建 + altool 上传。**适用前提:ASC 里最新 build 与当前代码一致。** |
+| **改了 Swift 源代码 / Info.plist / xcodeproj** | `make release` | 必须重新打包一份新 build,不能 `SKIP_BINARY`,否则审核拿到的是旧代码。|
+| **改了 bundle 里的资源/图标/ CFBundleDisplayName** | `make clean && make release` | 清掉 `build/` 里的旧 archive 和 DerivedData,避免 xcodebuild 命中旧缓存把老 icon/名字打进新 IPA。|
+| **只想更新文案 / 截图,不想提审** | `make release_metadata_only` 或 `SKIP_SUBMIT=1 make release` | 前者不构建二进制;后者构建并上传 build 但不点提审。|
+| **只改了 `fastlane/metadata/**.txt`(描述、关键词)** | `SKIP_BINARY=1 SKIP_SCREENSHOTS=1 make release` | 秒级完成,只走文案 diff。|
+| **重拍截图但不发版** | `FORCE_SNAPSHOT=1 SKIP_BINARY=1 SKIP_SUBMIT=1 make release` | 也可直接 `make screenshots`。|
+| **想先人工校稿,不自动发布** | `MANUAL_RELEASE=1 make release` | 审核通过后留在 "Pending Developer Release",去 ASC 手动点「发布」。|
+| **Pipeline 挂在 "Waiting for build processing"** | 先到 ASC → TestFlight 确认 build 状态,再 `SKIP_BINARY=1 make release` | 通常是 ASC 后台慢,build 其实已经 ready。|
+| **报错 `Missing required icon`** | `make clean && make release` | 重新生成 AppIcon(脚本会在 `gen` 阶段自动补)再打包。|
+| **报错 `App name is already being used`** | 改 `fastlane/metadata/zh-Hans/name.txt`、`project.yml` 的 `PRODUCT_NAME` / `CFBundleDisplayName` 等一系列字段,再 `make clean && make release` | bundle 里的显示名变了,必须重新构建,不能 `SKIP_BINARY`。|
+| **报错 `missing ... violenceCartoonOrFantasy ... pricing ... data usages`** | `SKIP_BINARY=1 make release` 再跑一次 | 分级配置 / 价格 / 隐私声明由 `make release` 自动写入,重跑即可。|
+| **CI / 无人值守** | `make release` | Makefile 自动载入 `.env`,无需 `source`;脚本幂等,可重复触发。|
+
+> 「需不需要 `make clean`」的判断口诀:只改了 `fastlane/metadata/`、`fastlane/screenshots/` 或 `fastlane/Fastfile` 的分支逻辑 → 不用 clean;只要碰到 `MyBody/`、`project.yml`、`Assets.xcassets/`、`Info.plist` → `make clean` 再 `make release`。
 
 如果只想像旧版一样「只推文案 + 截图,不打包不提审」：
 

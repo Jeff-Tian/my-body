@@ -117,15 +117,45 @@ final class ScanViewModel {
         if let image {
             parseStageMessage = "正在识别文字…"
             let ocr = ocrService
+            // 先把所有已登记的纠正读进内存快照，避免在后台线程触碰 SwiftData。
+            let snapshot: [String: [String: Double]] = {
+                guard let context = modelContext else { return [:] }
+                let all = (try? context.fetch(FetchDescriptor<OCRCorrection>())) ?? []
+                var dict: [String: [String: Double]] = [:]
+                for row in all {
+                    dict[row.fieldName, default: [:]][row.rawText] = row.correctedValue
+                }
+                return dict
+            }()
+            let lookup: (String, String) -> Double? = { field, raw in
+                snapshot[field]?[OCRCorrection.normalize(raw)]
+            }
             let result: OCRService.ParsedReport = await Task.detached(priority: .userInitiated) {
                 do {
-                    return try ocr.parseReport(from: image)
+                    return try ocr.parseReport(from: image, corrections: lookup)
                 } catch {
                     var failed = OCRService.ParsedReport()
                     failed.failedFields = Set(["all"])
                     return failed
                 }
             }.value
+            // 回到主 actor 后再把 useCount 累加上去
+            if let context = modelContext {
+                for (field, raw) in result.rawTexts {
+                    let key = OCRCorrection.normalize(raw)
+                    if snapshot[field]?[key] != nil {
+                        var desc = FetchDescriptor<OCRCorrection>(
+                            predicate: #Predicate { $0.fieldName == field && $0.rawText == key }
+                        )
+                        desc.fetchLimit = 1
+                        if let row = (try? context.fetch(desc))?.first {
+                            row.useCount += 1
+                            row.updatedAt = Date()
+                        }
+                    }
+                }
+                try? context.save()
+            }
             finalReport = result
         } else {
             // 图片加载失败（Mac "Designed for iPhone" 或 iCloud 原图未下载）：

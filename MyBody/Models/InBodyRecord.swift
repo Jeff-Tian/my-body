@@ -43,6 +43,12 @@ final class InBodyRecord {
     @Attribute(.externalStorage) var photoData: Data?
     var photoAssetIdentifier: String?
 
+    // MARK: - OCR provenance
+    /// 解析时每个字段命中的 OCR 原始 box 文本，JSON 编码的 `[字段名: 原始文本]`。
+    /// 用户修改值时用它回溯 OCR 到底看到了什么，从而把 (字段, 原始文本) → 新值
+    /// 写入 `OCRCorrection`，实现"越用越准"的本地反馈环。
+    var ocrRawTextsJSON: Data?
+
     var createdAt: Date
 
     init(
@@ -73,6 +79,7 @@ final class InBodyRecord {
         segFatRightLeg: Double? = nil,
         photoData: Data? = nil,
         photoAssetIdentifier: String? = nil,
+        ocrRawTextsJSON: Data? = nil,
         createdAt: Date = Date()
     ) {
         self.id = id
@@ -102,7 +109,21 @@ final class InBodyRecord {
         self.segFatRightLeg = segFatRightLeg
         self.photoData = photoData
         self.photoAssetIdentifier = photoAssetIdentifier
+        self.ocrRawTextsJSON = ocrRawTextsJSON
         self.createdAt = createdAt
+    }
+
+    /// 解码 `ocrRawTextsJSON` 为 `[字段名: OCR 原始文本]`。
+    var ocrRawTexts: [String: String] {
+        get {
+            guard let data = ocrRawTextsJSON,
+                  let dict = try? JSONDecoder().decode([String: String].self, from: data)
+            else { return [:] }
+            return dict
+        }
+        set {
+            ocrRawTextsJSON = try? JSONEncoder().encode(newValue)
+        }
     }
 
     var formattedDate: String {

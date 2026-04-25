@@ -14,7 +14,7 @@ PROJECT ?= MyBody.xcodeproj
 SIMULATOR_DEVICE ?= iPhone 16
 CONFIG ?= Debug
 BUNDLE_ID ?= brickverse.MyBodyApp
-PRODUCT_NAME ?= 我的身体
+PRODUCT_NAME ?= 身记
 DERIVED_DATA ?= build/DerivedData
 
 # 日志美化（可选）

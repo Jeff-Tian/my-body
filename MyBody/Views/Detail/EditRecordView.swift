@@ -6,6 +6,8 @@ struct EditRecordView: View {
     @Environment(\.modelContext) private var modelContext
     @Bindable var record: InBodyRecord
     @State private var showFullPhoto = false
+    /// 打开页面时的字段快照，用于保存时与当前值 diff，把用户修改回灌给 `OCRCorrection`。
+    @State private var initialSnapshot: [String: Double] = [:]
 
     var body: some View {
         NavigationStack {
@@ -85,6 +87,7 @@ struct EditRecordView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("保存") {
+                        recordCorrections()
                         try? modelContext.save()
                         dismiss()
                     }
@@ -94,7 +97,49 @@ struct EditRecordView: View {
             .fullScreenCover(isPresented: $showFullPhoto) {
                 FullPhotoView(photoData: record.photoData)
             }
+            .onAppear { captureSnapshot() }
         }
+    }
+
+    /// 把当前字段值冻结下来，供保存时 diff。
+    private func captureSnapshot() {
+        initialSnapshot = Self.currentValues(of: record)
+    }
+
+    /// 对比打开页面时的快照与当前值，为每个发生变化、且 OCR 有源头原始文本的字段
+    /// 登记一条 `OCRCorrection`。
+    private func recordCorrections() {
+        let raw = record.ocrRawTexts
+        guard !raw.isEmpty else { return }
+        let store = OCRCorrectionStore(context: modelContext)
+        let current = Self.currentValues(of: record)
+        for (field, value) in current {
+            guard let rawText = raw[field] else { continue }
+            let before = initialSnapshot[field]
+            // 只有当值真的变化时才登记，避免把未动字段误标为纠正
+            if before == nil || abs((before ?? 0) - value) > 1e-6 {
+                store.upsert(fieldName: field, rawText: rawText, correctedValue: value)
+            }
+        }
+    }
+
+    /// 把 `InBodyRecord` 里与 OCR 字段同名的当前值拍成 `[字段: 值]` 快照。
+    /// 字段名必须与 `OCRService.parseBoxes` 里 `FieldSpec.name` 一致。
+    private static func currentValues(of record: InBodyRecord) -> [String: Double] {
+        var out: [String: Double] = [:]
+        if let v = record.weight           { out["weight"]           = v }
+        if let v = record.skeletalMuscle   { out["skeletalMuscle"]   = v }
+        if let v = record.bodyFatMass      { out["bodyFatMass"]      = v }
+        if let v = record.totalBodyWater   { out["totalBodyWater"]   = v }
+        if let v = record.leanBodyMass     { out["leanBodyMass"]     = v }
+        if let v = record.bmi              { out["bmi"]              = v }
+        if let v = record.bodyFatPercent   { out["bodyFatPercent"]   = v }
+        if let v = record.whr              { out["whr"]              = v }
+        if let v = record.bmr              { out["bmr"]              = v }
+        if let v = record.inbodyScore      { out["inbodyScore"]      = Double(v) }
+        if let v = record.visceralFatLevel { out["visceralFatLevel"] = Double(v) }
+        if let v = record.dailyCalorie     { out["dailyCalorie"]     = v }
+        return out
     }
 
     private func optionalDouble(_ label: String, value: Binding<Double?>) -> some View {

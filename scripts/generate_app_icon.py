@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate a 1024×1024 App Icon for MyBody (我的身体).
+"""Generate a 1024×1024 App Icon for MyBody (身记).
 
 Design: 健康绿底 + 白色圆角内块 + 品牌字「身」。简单、离线、可随代码仓库一起生成。
 输出:

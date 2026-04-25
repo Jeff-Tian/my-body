@@ -70,7 +70,7 @@ struct SettingsView: View {
                 } header: {
                     Text("关于")
                 } footer: {
-                    Text("我的身体不会上传任何健康数据，所有信息仅保存在你的设备上。")
+                    Text("身记不会上传任何健康数据，所有信息仅保存在你的设备上。")
                 }
             }
             .navigationTitle("设置")

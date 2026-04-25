@@ -33,8 +33,13 @@ final class OCRService: Sendable {
         var segFatRightLeg: Double?
         var failedFields: Set<String> = []
 
+        /// 解析时每个成功字段命中的 OCR 原始 box 文本。
+        /// 用于把 "OCR 看到了什么" 写入 `InBodyRecord`，再在用户修正时反馈给 `OCRCorrection`。
+        var rawTexts: [String: String] = [:]
+
         func toRecord(photoData: Data?, assetIdentifier: String?) -> InBodyRecord {
-            InBodyRecord(
+            let rawJSON = try? JSONEncoder().encode(rawTexts)
+            return InBodyRecord(
                 scanDate: scanDate ?? Date(),
                 scanTime: scanTime,
                 weight: weight,
@@ -60,7 +65,8 @@ final class OCRService: Sendable {
                 segFatLeftLeg: segFatLeftLeg,
                 segFatRightLeg: segFatRightLeg,
                 photoData: photoData,
-                photoAssetIdentifier: assetIdentifier
+                photoAssetIdentifier: assetIdentifier,
+                ocrRawTextsJSON: rawJSON
             )
         }
     }
@@ -156,6 +162,15 @@ final class OCRService: Sendable {
         return parseBoxes(boxes)
     }
 
+    /// 带用户纠正反馈的解析入口。`corrections(fieldName, rawText)` 命中时将直接替换解析值。
+    func parseReport(
+        from image: UIImage,
+        corrections: ((String, String) -> Double?)?
+    ) throws -> ParsedReport {
+        let boxes = try recognizeBoxes(from: image)
+        return parseBoxes(boxes, corrections: corrections)
+    }
+
     func parseLines(_ lines: [String]) -> ParsedReport {
         // 无 bbox 的退化路径:把每段文本伪造一个横条 box(同一行),
         // 使后续空间算法仍能跑,但准确度会降低。
@@ -169,6 +184,15 @@ final class OCRService: Sendable {
     /// 基于空间坐标解析:对每个字段关键字,找到包含该关键字的 TextBox,
     /// 然后在"同一水平带内右侧"或"正下方邻近列"寻找最近的数字 box。
     func parseBoxes(_ boxes: [TextBox]) -> ParsedReport {
+        parseBoxes(boxes, corrections: nil)
+    }
+
+    /// 同 `parseBoxes(_:)`，额外接受一个纠正查询闭包：命中 `(fieldName, rawText)`
+    /// 就把解析值直接替换为用户历史修正值。
+    func parseBoxes(
+        _ boxes: [TextBox],
+        corrections: ((String, String) -> Double?)?
+    ) -> ParsedReport {
         var report = ParsedReport()
         let allText = boxes.map { $0.text }.joined(separator: "\n")
 
@@ -202,8 +226,14 @@ final class OCRService: Sendable {
 
         var values: [String: Double] = [:]
         for spec in specs {
-            if let v = findValue(for: spec.keys, in: boxes, expected: spec.expected) {
-                values[spec.name] = v
+            if let hit = findValue(for: spec.keys, in: boxes, expected: spec.expected) {
+                // 先看用户是否已经为这段原始文本登记过纠正
+                if let corrected = corrections?(spec.name, hit.rawText) {
+                    values[spec.name] = corrected
+                } else {
+                    values[spec.name] = hit.value
+                }
+                report.rawTexts[spec.name] = hit.rawText
             } else {
                 report.failedFields.insert(spec.name)
             }
@@ -256,7 +286,7 @@ final class OCRService: Sendable {
         for keys: [String],
         in boxes: [TextBox],
         expected: ClosedRange<Double>
-    ) -> Double? {
+    ) -> (value: Double, rawText: String)? {
         // 优先匹配更长、更独特的关键字
         let sortedKeys = keys.sorted { $0.count > $1.count }
 
@@ -276,60 +306,60 @@ final class OCRService: Sendable {
         for label in labels {
             // 1. 标签文本内自带的主值 (e.g., "身体水分总量 41.5kg(30.3~37.0)")
             if let n = primaryNumber(in: label.text, excludingKeys: keys), expected.contains(n) {
-                return n
+                return (n, label.text)
             }
 
             // 2. 同行右侧,在期望区间内的候选
             let rowTol = max(label.box.height, 0.012) * 1.8
-            let rowNumbers: [(Double, CGFloat)] = boxes
+            let rowNumbers: [(Double, CGFloat, String)] = boxes
                 .filter { $0.left > label.right - 0.005 }
                 .filter { abs($0.cy - label.cy) < rowTol }
                 .compactMap { b in
                     guard let n = primaryNumber(in: b.text, excludingKeys: keys) else { return nil }
-                    return (n, b.cx)
+                    return (n, b.cx, b.text)
                 }
             // 期望区间内的候选,挑最靠左(通常第一个命中就是正确的)
             // 注意 InBody 230 的范围下界(例如 53.4)可能也落在 weight 区间里,
             // 所以要过滤掉来自"纯范围"的 box
-            let rowFiltered: [(Double, CGFloat)] = boxes
+            let rowFiltered: [(Double, CGFloat, String)] = boxes
                 .filter { $0.left > label.right - 0.005 }
                 .filter { abs($0.cy - label.cy) < rowTol }
                 .filter { !isPureRange($0.text) }
                 .compactMap { b in
                     guard let n = primaryNumber(in: b.text, excludingKeys: keys) else { return nil }
-                    return (n, b.cx)
+                    return (n, b.cx, b.text)
                 }
 
             if let hit = rowFiltered.first(where: { expected.contains($0.0) }) {
-                return hit.0
+                return (hit.0, hit.2)
             }
 
             // 3. 仍没有命中区间,但有行内候选 → 取期望区间内最接近的,或第一个
             if !rowFiltered.isEmpty {
                 if let best = rowFiltered.min(by: { distanceToRange($0.0, expected) < distanceToRange($1.0, expected) }),
                    distanceToRange(best.0, expected) <= expected.upperBound * 0.5 {
-                    return best.0
+                    return (best.0, best.2)
                 }
             }
 
             // 4. 再宽松一点:允许范围 box(有些小字段如 BMI 没有范围,避免误判)
-            if let n = rowNumbers.first(where: { expected.contains($0.0) })?.0 {
-                return n
+            if let hit = rowNumbers.first(where: { expected.contains($0.0) }) {
+                return (hit.0, hit.2)
             }
 
             // 5. 正下方列(表头/数据两行布局,少见但保留)
             let colTol: CGFloat = 0.05
-            let below: [(Double, CGFloat)] = boxes
+            let below: [(Double, CGFloat, String)] = boxes
                 .filter { $0.cy < label.cy - label.box.height * 0.3 }
                 .filter { abs($0.cx - label.cx) < colTol }
                 .filter { !isPureRange($0.text) }
                 .compactMap { b in
                     guard let n = primaryNumber(in: b.text, excludingKeys: keys) else { return nil }
-                    return (n, label.cy - b.cy)
+                    return (n, label.cy - b.cy, b.text)
                 }
                 .sorted { $0.1 < $1.1 }
             if let hit = below.first(where: { expected.contains($0.0) }), hit.1 < 0.10 {
-                return hit.0
+                return (hit.0, hit.2)
             }
         }
 

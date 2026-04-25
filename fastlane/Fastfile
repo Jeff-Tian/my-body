@@ -30,7 +30,7 @@ end
 
 platform :ios do
   APP_IDENTIFIER = 'brickverse.MyBodyApp'
-  APP_NAME       = '我的身体'
+  APP_NAME       = '身记'
   PRIMARY_LANG   = 'Simplified Chinese'
   APP_SKU        = 'MyBody'
 
@@ -244,7 +244,14 @@ platform :ios do
       )
     end
 
-    # 2) 推送元数据 + 截图,并按需一口气提交审核 + 自动发布
+    # 2) 在提审前,把 ASC 侧「必填但不走 deliver metadata」的三样东西一次搞定:
+    #    - 价格(设为 Free / tier 0,覆盖全部可用地区)
+    #    - App Privacy 数据使用声明(声明"不收集任何数据"并发布)
+    #    - (年龄分级由下面的 upload_to_app_store 通过 app_rating_config_path 写入)
+    ensure_pricing_and_privacy_ready!(APP_IDENTIFIER) unless skip_submit
+
+    # 3) 推送元数据 + 截图,并按需一口气提交审核 + 自动发布
+    rating_config_path = File.expand_path('metadata/itunes_rating_config.json', __dir__)
     upload_to_app_store(
       app_identifier: APP_IDENTIFIER,
       skip_binary_upload: true,       # 二进制已由 upload_to_testflight 传好
@@ -260,6 +267,7 @@ platform :ios do
       reject_if_possible: true,        # 已有审核中的版本则先拒绝再覆盖
       metadata_path: metadata_dir,
       screenshots_path: screenshots_dir,
+      app_rating_config_path: File.exist?(rating_config_path) ? rating_config_path : nil,
       ignore_language_directory_validation: true,
       submission_information: {
         add_id_info_uses_idfa: false,
@@ -334,5 +342,78 @@ platform :ios do
     end
 
     editable
+  end
+
+  # 将 App Price 设为 Free (tier 0),并把 App Privacy (数据使用声明)
+  # 设为「不收集任何数据」并发布。提审前这两样是 ASC 硬性必填项,否则
+  # upload_to_app_store 在 submit 阶段会报 "App is missing required pricing"
+  # 以及 "You must have published answers to your app's data usages"。
+  def ensure_pricing_and_privacy_ready!(app_identifier)
+    app = Spaceship::ConnectAPI::App.find(app_identifier)
+    UI.user_error!("找不到 App: #{app_identifier}") unless app
+
+    ensure_free_pricing!(app)
+    ensure_privacy_no_data_collected!(app)
+  end
+
+  # 设置免费(tier 0)。已经是免费就跳过。ASC 要求至少设一次价格才能提审。
+  def ensure_free_pricing!(app)
+    begin
+      current = Spaceship::ConnectAPI.get_app_prices(app_id: app.id, limit: 1)
+      current = current.to_models if current.respond_to?(:to_models)
+      current = current.first
+    rescue => e
+      UI.important("[pricing] 查询当前价格失败(可能是首次): #{e.message}")
+      current = nil
+    end
+
+    if current
+      UI.success("[pricing] 价格已设置,跳过。")
+      return
+    end
+
+    UI.message("[pricing] App 尚未设置价格 → 通过 patch_app 设为 Free (tier 0)…")
+    begin
+      Spaceship::ConnectAPI.patch_app(
+        app_id: app.id,
+        attributes: {},
+        app_price_tier_id: '0'
+      )
+      UI.success("[pricing] ✅ 已设为 Free。")
+    rescue => e
+      UI.important("[pricing] ⚠️ 自动定价失败: #{e.message}")
+      UI.important("[pricing] 请到 ASC → 定价与销售范围 手动选 Free,然后重跑 make release。")
+    end
+  end
+
+  # 声明「不收集任何数据」并发布。幂等:已发布则跳过。
+  def ensure_privacy_no_data_collected!(app)
+    begin
+      existing = Spaceship::ConnectAPI.get_app_data_usages(
+        app_id: app.id, limit: 1
+      )
+    rescue => e
+      UI.important("[privacy] 查询 data usages 失败: #{e.message}")
+      existing = nil
+    end
+
+    if existing && existing.any?
+      UI.success("[privacy] 已有 data usage 声明 #{existing.size} 条,跳过。")
+    else
+      UI.message("[privacy] 尚未声明 → 标记为「不收集任何数据」并发布…")
+    end
+
+    # 无论有没有记录,都把 publish state 置为「已发布 / 不收集数据」。
+    # Spaceship 的方法:patch_app_data_usages_publish_state
+    begin
+      Spaceship::ConnectAPI.patch_app_data_usages_publish_state(
+        app_data_usages_publish_state_id: app.id,
+        published: true
+      )
+      UI.success("[privacy] ✅ 已发布「不收集任何数据」声明。")
+    rescue => e
+      UI.important("[privacy] ⚠️ 自动发布失败: #{e.message}")
+      UI.important("[privacy] 请到 ASC → App 隐私 点「开始」→ 选「未收集数据」→ 发布。")
+    end
   end
 end

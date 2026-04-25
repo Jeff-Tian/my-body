@@ -1,7 +1,7 @@
 //  SnapshotScreenshotsUITests.swift
 //  MyBodyUITests
 //
-//  Drives fastlane snapshot screenshots for 我的身体.
+//  Drives fastlane snapshot screenshots for 身记.
 //
 import XCTest
 

@@ -39,7 +39,7 @@ targets:
       base:
         INFOPLIST_FILE: MyBody/Info.plist
         PRODUCT_BUNDLE_IDENTIFIER: brickverse.MyBodyApp
-        PRODUCT_NAME: 我的身体
+        PRODUCT_NAME: 身记
         DEVELOPMENT_TEAM: "${DEVELOPMENT_TEAM}"
         CODE_SIGN_STYLE: Automatic
         SUPPORTS_MACCATALYST: NO
@@ -57,7 +57,10 @@ targets:
         INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
-        INFOPLIST_KEY_CFBundleDisplayName: "我的身体"
+        INFOPLIST_KEY_CFBundleDisplayName: "身记"
+        # 声明 App 不使用任何非豁免加密,避免每次 TestFlight 上传弹出 Export
+        # Compliance 问卷;对应 Info.plist 中的 ITSAppUsesNonExemptEncryption=NO。
+        INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: "NO"
 
   MyBodyUITests:
     type: bundle.ui-testing

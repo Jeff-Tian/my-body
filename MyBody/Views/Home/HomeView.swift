@@ -57,7 +57,7 @@ struct HomeView: View {
                 }
                 .padding(20)
             }
-            .navigationTitle("我的身体")
+            .navigationTitle("身记")
             .toolbarColorScheme(.dark, for: .navigationBar)
             .toolbarBackground(Color.appGreen, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)

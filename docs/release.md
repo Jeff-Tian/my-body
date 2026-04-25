@@ -99,7 +99,7 @@ make release
 | 字段 | 值 | 出处 |
 |---|---|---|
 | Bundle ID | `brickverse.MyBodyApp` | `project.yml` |
-| App Name | `我的身体` | `fastlane/Fastfile` `APP_NAME` |
+| App Name | `身记` | `fastlane/Fastfile` `APP_NAME` |
 | Primary Language | Simplified Chinese | `fastlane/Fastfile` `PRIMARY_LANG`，**一经设定不可改** |
 | SKU | `MyBody` | `fastlane/Fastfile` `APP_SKU` |
 | Platform | iOS only | `fastlane/Fastfile` |
