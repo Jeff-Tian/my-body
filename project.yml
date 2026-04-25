@@ -35,9 +35,12 @@ targets:
     platform: iOS
     sources:
       - path: MyBody
+    dependencies:
+      - sdk: HealthKit.framework
     settings:
       base:
         INFOPLIST_FILE: MyBody/Info.plist
+        CODE_SIGN_ENTITLEMENTS: MyBody/MyBody.entitlements
         PRODUCT_BUNDLE_IDENTIFIER: brickverse.MyBodyApp
         PRODUCT_NAME: 身记
         DEVELOPMENT_TEAM: "${DEVELOPMENT_TEAM}"
@@ -53,6 +56,8 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_NSPhotoLibraryUsageDescription: "用于自动识别相册中的 InBody 报告并录入健康数据。"
         INFOPLIST_KEY_NSCameraUsageDescription: "用于拍摄 InBody 报告并自动识别健康数据。"
+        INFOPLIST_KEY_NSHealthUpdateUsageDescription: "用于将识别出的体重数据同步到「健康」App，方便统一查看与跨 App 共享。"
+        INFOPLIST_KEY_NSHealthShareUsageDescription: "用于读取「健康」App 中的体重数据，确认同步是否成功。"
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
         INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
         INFOPLIST_KEY_UILaunchScreen_Generation: YES

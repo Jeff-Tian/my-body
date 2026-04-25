@@ -89,6 +89,7 @@ struct EditRecordView: View {
                     Button("保存") {
                         recordCorrections()
                         try? modelContext.save()
+                        syncWeightToHealthIfEnabled()
                         dismiss()
                     }
                     .fontWeight(.bold)
@@ -104,6 +105,18 @@ struct EditRecordView: View {
     /// 把当前字段值冻结下来，供保存时 diff。
     private func captureSnapshot() {
         initialSnapshot = Self.currentValues(of: record)
+    }
+
+    /// 若用户在设置中开启了「同步体重到健康」，把当前体重写入 HealthKit。
+    /// 失败静默忽略：用户体验上保存按钮应该总是能关闭页面，
+    /// HealthKit 错误不应阻塞 SwiftData 持久化。
+    private func syncWeightToHealthIfEnabled() {
+        guard UserDefaults.standard.bool(forKey: "syncWeightToHealth"),
+              let weight = record.weight else { return }
+        let date = record.scanDate
+        Task.detached {
+            try? await HealthKitService.shared.saveWeight(weight, date: date)
+        }
     }
 
     /// 对比打开页面时的快照与当前值，为每个发生变化、且 OCR 有源头原始文本的字段

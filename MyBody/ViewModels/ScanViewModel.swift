@@ -180,6 +180,15 @@ final class ScanViewModel {
             context.insert(record)
             try? context.save()
             savedCount += 1
+
+            // 可选：把体重写入系统「健康」App。失败时静默忽略，避免阻塞批量导入。
+            if UserDefaults.standard.bool(forKey: "syncWeightToHealth"),
+               let weight = record.weight {
+                let date = record.scanDate
+                Task.detached {
+                    try? await HealthKitService.shared.saveWeight(weight, date: date)
+                }
+            }
         }
 
         currentParseIndex += 1
