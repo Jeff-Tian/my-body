@@ -1,0 +1,18 @@
+{
+  "universe_usage_history": [
+    {
+      "universe": "Alien",
+      "assigned_at": "2026-05-15",
+      "agent_count": 4
+    }
+  ],
+  "assignment_cast_snapshots": {
+    "2026-05-15-initial": {
+      "assignment_id": "2026-05-15-initial",
+      "universe": "Alien",
+      "created_at": "2026-05-15",
+      "agents": ["ripley", "lambert", "ash", "parker"],
+      "project": "my-body"
+    }
+  }
+}
