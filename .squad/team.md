@@ -19,8 +19,13 @@
 | 🔧 Ash | Core Engineer (Vision · HealthKit · CloudKit) | `.squad/agents/ash/charter.md` | active |
 | 🧪 Parker | Tester / QA | `.squad/agents/parker/charter.md` | active |
 | 🤖 @copilot | GitHub Coding Agent | `.github/copilot-instructions.md` (if present) | active |
+| 👤 Jeff Tian | Senior Engineer (Human) | — | active |
 | 📋 Scribe | Session Logger | `.squad/agents/scribe/charter.md` | active |
 | 🔄 Ralph | Work Monitor | `.squad/agents/ralph/charter.md` | active |
+
+### Human Members
+
+- **Jeff Tian** — Senior Engineer. Human team member (not an AI agent). Strengths: secrets, Apple Developer/App Store Connect, provisioning and signing, cloud/infra console configuration, production release decisions, and other manual operations. Coordinator pauses and surfaces a clear task when work routes to Jeff; he relays results back through the user.
 
 ### @copilot Capability Profile
 
