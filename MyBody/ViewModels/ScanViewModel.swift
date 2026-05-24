@@ -27,6 +27,14 @@ final class ScanViewModel {
     var skippedCount = 0
     /// 因已存在同一照片的记录而跳过的数量（幂等去重）
     var duplicateCount = 0
+    /// 本次批量中因去重而被跳过的 PHAsset.localIdentifier 列表。
+    /// 批量结束后 UI 据此询问用户是否要对这些已有记录重新跑一遍 OCR。
+    var duplicateAssetIds: [String] = []
+
+    /// 批量「重新识别」进度：当前正在处理第几条（1-based 由 UI 决定）。
+    var reparseIndex: Int = 0
+    /// 批量「重新识别」进度：总条数（即 `duplicateAssetIds.count` 启动快照）。
+    var reparseTotal: Int = 0
 
     private let photoService = PhotoScanService()
     private let ocrService = OCRService()
@@ -100,6 +108,7 @@ final class ScanViewModel {
         let assetId = photo.asset.localIdentifier
         if let context = modelContext, recordExists(forAssetId: assetId, in: context) {
             duplicateCount += 1
+            duplicateAssetIds.append(assetId)
             currentParseIndex += 1
             parseStageMessage = ""
             if currentParseIndex < selected.count {
@@ -217,6 +226,9 @@ final class ScanViewModel {
         savedCount = 0
         skippedCount = 0
         duplicateCount = 0
+        duplicateAssetIds = []
+        reparseIndex = 0
+        reparseTotal = 0
     }
 
     /// 单张照片导入：跳过相册扫描和确认网格,直接对一张图片走 OCR/保存流程。
@@ -465,5 +477,64 @@ final class ScanViewModel {
 
         try context.save()
         return parsed
+    }
+
+    // MARK: - Batch re-parse duplicates
+
+    /// 对本次批量中所有「因去重而跳过」的记录重新跑 OCR，并就地覆盖数值字段。
+    ///
+    /// - 来源：`duplicateAssetIds`（在 `parseNextPhoto` 的去重分支累积）。
+    /// - 进度：通过 `reparseIndex` / `reparseTotal` 暴露给 UI，文案见 `parseStageMessage`。
+    /// - 行为：单条失败不中断，记入 `errors` 继续下一条（best-effort）。
+    /// - 完成后保留 `duplicateAssetIds` 不变，便于 UI 显示「X / Y 已更新」汇总。
+    @MainActor
+    func reparseDuplicateRecords() async -> (succeeded: Int, failed: Int, errors: [(assetId: String, error: Error)]) {
+        guard let context = modelContext else {
+            return (0, 0, [])
+        }
+
+        let ids = duplicateAssetIds
+        reparseTotal = ids.count
+        reparseIndex = 0
+
+        var succeeded = 0
+        var failed = 0
+        var errors: [(assetId: String, error: Error)] = []
+
+        for assetId in ids {
+            reparseIndex += 1
+            parseStageMessage = "正在重新识别 \(reparseIndex)/\(reparseTotal)…"
+
+            // 找回对应的 InBodyRecord。罕见竞态：记录可能已被删除。
+            var descriptor = FetchDescriptor<InBodyRecord>(
+                predicate: #Predicate { $0.photoAssetIdentifier == assetId }
+            )
+            descriptor.fetchLimit = 1
+            let record: InBodyRecord?
+            do {
+                record = try context.fetch(descriptor).first
+            } catch {
+                failed += 1
+                errors.append((assetId, error))
+                continue
+            }
+
+            guard let target = record else {
+                failed += 1
+                errors.append((assetId, ReparseError.photoNotInAlbum))
+                continue
+            }
+
+            do {
+                _ = try await Self.reparseExistingReport(target, context: context, ocrService: ocrService)
+                succeeded += 1
+            } catch {
+                failed += 1
+                errors.append((assetId, error))
+            }
+        }
+
+        parseStageMessage = ""
+        return (succeeded, failed, errors)
     }
 }

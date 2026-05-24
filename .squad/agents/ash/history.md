@@ -87,3 +87,31 @@ let result = await scanVM.reparseDuplicateRecords()
 
 **Files touched:**
 - `MyBody/ViewModels/ScanViewModel.swift` (~60 lines added, 0 removed; no behavior change to existing dedup/initial scan path)
+
+### 2026-05-24: HealthKitWriting protocol seam + FakeHealthKitWriter (Phase 2.5)
+
+Ripley arbitration GO. Extracted minimal testable seam so Parker's 6 `XCTSkip`'d tests can run without touching `HKHealthStore`.
+
+**Surface (`MyBody/Services/HealthKitService.swift`):**
+- `protocol HealthKitWriting`: `isAvailable`, `bodyMassWriteStatus`, `requestAuthorization()`, `writeWeightSamples(_:) -> HealthKitWriteResult`, `saveWeight(_:date:recordID:)`. ONLY what Trends/Edit/Scan need — no `saveWeight(_:date:)` legacy overload, no internal query helpers.
+- `HealthKitService: HealthKitWriting` (single-line conformance; methods already matched).
+- `static func partitionForWrite(_:now:) -> (writable:[InBodyRecord], skippedInvalid:[InBodyRecord])` — extracted from `writeWeightSamples` so production AND `FakeHealthKitWriter` reuse one filter. `now: Date = Date()` injectable for future-date tests. `writeWeightSamples` now calls it then `compactMap`s candidates.
+
+**Signature changes:** none to existing public methods. Call sites (`ScanViewModel` ×2, `EditRecordView`, `TrendsView`, `SettingsView`) untouched per task; `HealthKitService.shared` still concrete singleton.
+
+**Fake (`MyBodyTests/Services/FakeHealthKitWriter.swift`):**
+- `@unchecked Sendable` + `NSLock` for thread-safe call recording.
+- Knobs: `isAvailable`, `bodyMassWriteStatus`, `authorizationError`, `onRequestAuthorization` (mutate status mid-prompt to simulate user denial), `preExistingRecordIDs` (→ `skippedDuplicate`), `failingRecordIDs` (→ `failed`), `saveError`.
+- Records: `authorizationCallCount`, `saveWeightCalls`, `writeWeightSamplesCalls`.
+- `writeWeightSamples` mirrors production pre-flight (device → auth → partition), then categorizes writables via the knob sets. **Reuses `HealthKitService.partitionForWrite`** so fake/prod cannot drift.
+
+**Wiring notes for Parker:**
+- Tests that exercise `writeWeightSamples` directly: instantiate `FakeHealthKitWriter()`, set knobs, `try await fake.writeWeightSamples(records)`. No injection into `HealthKitService.shared` needed for unit-only tests.
+- For `metadataIncludesSyncIdentifier` / `dateBoundariesPreserved`: the fake doesn't construct `HKQuantitySample` (it just categorizes). If you need to assert metadata/date roundtrips, either (a) trust the production code path (covered by integration) and assert call recording instead, or (b) ask Ash to add a `capturedSamples: [(syncId:String, start:Date, end:Date)]` recording hook on the fake.
+- `concurrentWrites_serialize`: HealthKitWriting itself doesn't promise serialization — that's an HKHealthStore property. Either drop the test or restate it as "calls don't crash under concurrency" (the lock guarantees that).
+- `notAuthorized_throwsBeforeWrite`: set `bodyMassWriteStatus = .sharingDenied`; assert throws + `saveWeightCalls.isEmpty`.
+
+**Results:** `make build` ✅. `make test-unit` ✅ 18 tests, 0 failures, 6 skipped (Parker's queue).
+
+### 2026-05-24: Phase 2.5 complete — HealthKitWriting protocol seam shipped
+Extracted protocol + lifted `partitionForWrite` to static + created `FakeHealthKitWriter`. Build green. Parker activated all 6 XCTSkip tests against the fake → 18/0/0. Source not yet committed (Jeff manual). Drift note: fake records bulk `[InBodyRecord]` call args, not per-sample HKQuantitySample saves; HK metadata invariants deferred to integration tests.

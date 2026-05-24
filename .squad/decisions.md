@@ -479,3 +479,13 @@ protocol HealthKitWriting {
 **By:** Lambert (UI)
 **What:** `PhotoScanView` 在 `batchFinished` 时若 `duplicateAssetIds` 非空，弹 alert「重新识别已有报告？」，按钮「重新识别」(default) / 「跳过」(cancel)。「跳过」直接关闭 sheet；「重新识别」展示 dim+material overlay（文案绑 `reparseIndex/reparseTotal`），完成后顶部 capsule banner 显示「已更新 X 条」(`appGreen`) 或「已更新 X 条，Y 条失败」(`appOrange`)，2.5s 后 `dismiss()`。
 **Why:** 去重保证幂等的同时，老照片不能享受 OCR 引擎升级；显式询问而非自动跑，避免覆盖用户已手编辑数据时的预期错位。复用 DetailView 单条 reparse 的视觉语言保持一致。
+
+### 2026-05-24: HealthKitWriting protocol seam (Phase 2.5)
+**By:** Ash (Core Engineer)
+**What:** Extracted `protocol HealthKitWriting` from `HealthKitService` exposing 5 members used by Trends/Edit/Scan call sites: `isAvailable`, `bodyMassWriteStatus`, `requestAuthorization()`, `writeWeightSamples(_:)`, `saveWeight(_:date:recordID:)`. `HealthKitService` conforms; `shared` stays concrete. Internal query helpers, `HKHealthStore` ref, and legacy `saveWeight(_:date:)` overload NOT on protocol. Also lifted `static HealthKitService.partitionForWrite(_:now:)` so fake reuses the same `weight > 0 && scanDate <= now` filter as production (no drift). `FakeHealthKitWriter` (MyBodyTests/Services/) conforms with auth/availability/duplicate/failure knobs + thread-safe call recording, mirroring production pre-flight order (device → auth → partition → categorize).
+**Why:** Unblocks Parker's 6 XCTSkip'd HealthKit tests without touching `HKHealthStore` directly (Parker charter forbids). No signature changes, no call-site refactors, `InBodyRecord` + `HealthKitWriteResult` shapes preserved (Lambert-safe). Ripley arbitration GO confirmed by Jeff.
+
+### 2026-05-24: HealthKit Phase 1 + 2 unit tests fully activated (18/0/0)
+**By:** Parker (Tester/QA)
+**What:** Replaced 6 XCTSkip stubs in `MyBodyTests/Services/HealthKitWeightWriteTests.swift` with real tests against Ash's `FakeHealthKitWriter`: notAuthorized throws, unavailableDevice throws, recordID flow-through, duplicate skip (preExistingRecordIDs), scanDate preservation, concurrent `async let` batches aggregate correctly. `make test-unit` → 18/0/0 (was 18/0/6).
+**Why:** Adaptation: fake records input `[InBodyRecord]` per bulk call, not per-sample HKQuantitySample saves — so metadata/date tests re-aimed at fake's observable surface (recordID + scanDate pass-through). HK `HKMetadataKeySyncIdentifier` invariant becomes production-only, deferred to integration tests when `HealthKitWeightWriteUITests.swift.TODO` lands. Drift documented inline. All Phase 1 + 2 unit-test scope green; ScanViewModel/EditRecordView can now be DI-tested via the protocol without HKHealthStore.

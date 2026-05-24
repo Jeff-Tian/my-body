@@ -6,18 +6,37 @@ struct PhotoScanView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var viewModel = ScanViewModel()
 
+    // MARK: - 批量「重新识别」交互状态
+    /// 批量结束后，若 `duplicateAssetIds.count > 0`，弹出确认 alert。
+    @State private var showReparseDuplicatesConfirm = false
+    /// reparse 期间显示全屏 overlay；同时屏蔽返回按钮。
+    @State private var isReparsing = false
+    /// 完成后展示的汇总文案（成功/失败条数）；非 nil 时显示顶部 banner。
+    @State private var reparseSummary: ReparseSummary?
+
+    fileprivate struct ReparseSummary {
+        let succeeded: Int
+        let failed: Int
+        var hasFailures: Bool { failed > 0 }
+    }
+
     var body: some View {
         NavigationStack {
-            Group {
-                if viewModel.showConfirmation {
-                    ScanConfirmView(viewModel: viewModel) {
-                        viewModel.showConfirmation = false
-                        viewModel.currentParseIndex = 0
-                        viewModel.isParsing = true   // 立即显示 loading，避免等 Task 调度时闪白
-                        Task { await viewModel.parseNextPhoto() }
+            ZStack {
+                Group {
+                    if viewModel.showConfirmation {
+                        ScanConfirmView(viewModel: viewModel) {
+                            viewModel.showConfirmation = false
+                            viewModel.currentParseIndex = 0
+                            viewModel.isParsing = true   // 立即显示 loading，避免等 Task 调度时闪白
+                            Task { await viewModel.parseNextPhoto() }
+                        }
+                    } else {
+                        scanningView
                     }
-                } else {
-                    scanningView
+                }
+                if isReparsing {
+                    reparsingOverlay
                 }
             }
             .navigationTitle("导入报告")
@@ -28,6 +47,7 @@ struct PhotoScanView: View {
                         viewModel.reset()
                         dismiss()
                     }
+                    .disabled(isReparsing)
                 }
             }
             .onAppear {
@@ -35,9 +55,77 @@ struct PhotoScanView: View {
                 Task { await viewModel.startScan() }
             }
             .onChange(of: viewModel.batchFinished) { _, finished in
-                if finished { dismiss() }
+                guard finished else { return }
+                if viewModel.duplicateAssetIds.isEmpty {
+                    dismiss()
+                } else {
+                    showReparseDuplicatesConfirm = true
+                }
+            }
+            .alert("重新识别已有报告？", isPresented: $showReparseDuplicatesConfirm) {
+                Button("跳过", role: .cancel) {
+                    dismiss()
+                }
+                Button("重新识别") {
+                    Task { await runBatchReparse() }
+                }
+            } message: {
+                Text("本次扫描发现 \(viewModel.duplicateAssetIds.count) 张报告之前已经导入过。是否用最新版本的识别引擎重新读取并覆盖这些报告的数值？\n\n（原始照片仍保留，只替换识别出的数值。）")
+            }
+            .overlay(alignment: .top) {
+                if let summary = reparseSummary {
+                    BatchReparseBanner(summary: summary)
+                        .padding(.top, 8)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
             }
         }
+    }
+
+    // MARK: - 批量「重新识别」overlay & action
+
+    private var reparsingOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.35).ignoresSafeArea()
+            VStack(spacing: 12) {
+                ProgressView()
+                    .progressViewStyle(.circular)
+                    .tint(.white)
+                    .scaleEffect(1.2)
+                Text(reparseProgressText)
+                    .font(.subheadline)
+                    .foregroundColor(.white)
+                    .multilineTextAlignment(.center)
+            }
+            .padding(24)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+        }
+        .transition(.opacity)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("正在重新识别已有报告")
+    }
+
+    /// 文案优先使用 ViewModel 暴露的索引；为 0 时退化为「重新识别中…」。
+    private var reparseProgressText: String {
+        let total = viewModel.reparseTotal
+        let idx = viewModel.reparseIndex
+        if total > 0 && idx > 0 {
+            return "重新识别中 \(min(idx, total))/\(total)…"
+        }
+        return "重新识别中…"
+    }
+
+    private func runBatchReparse() async {
+        isReparsing = true
+        defer { isReparsing = false }
+
+        let result = await viewModel.reparseDuplicateRecords()
+        let summary = ReparseSummary(succeeded: result.succeeded, failed: result.failed)
+        withAnimation { reparseSummary = summary }
+
+        try? await Task.sleep(nanoseconds: 2_500_000_000)
+        withAnimation { reparseSummary = nil }
+        dismiss()
     }
 
     private var scanningView: some View {
@@ -181,5 +269,42 @@ struct PhotoScanView: View {
                     .foregroundColor(.secondary)
             }
         }
+    }
+}
+
+// MARK: - 批量「重新识别」结果 banner
+
+private struct BatchReparseBanner: View {
+    let summary: PhotoScanView.ReparseSummary
+
+    private var text: String {
+        if summary.hasFailures {
+            return "已更新 \(summary.succeeded) 条，\(summary.failed) 条失败"
+        } else {
+            return "已更新 \(summary.succeeded) 条"
+        }
+    }
+
+    private var background: Color {
+        summary.hasFailures ? .appOrange : .appGreen
+    }
+
+    private var icon: String {
+        summary.hasFailures ? "exclamationmark.triangle.fill" : "checkmark.circle.fill"
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon)
+            Text(text)
+                .fontWeight(.medium)
+        }
+        .font(.subheadline)
+        .foregroundColor(.white)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(background, in: Capsule())
+        .shadow(color: .black.opacity(0.15), radius: 6, y: 2)
+        .accessibilityLabel(text)
     }
 }

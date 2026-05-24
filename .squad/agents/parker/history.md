@@ -66,3 +66,13 @@ Two open arbitrations (dedup mechanism, `HKMetadataKeyWasUserEntered`) must be r
 
 ## 2026-05-24 — Phase 2 shipped (team note)
 Trends「写入健康」Phase 2 complete. My deliverable: `HealthKitWeightWriteTests.swift` (10 pass + 6 XCTSkip) + UI tests parked at `.TODO`. **Open ask for Ripley:** extract `HealthKitWriting` protocol seam on `HealthKitService` — unlocks 6 of my most valuable unit tests (auth, dedup, concurrency, metadata round-trip). Not a release blocker.
+
+### 2026-05-24: Activated 6 XCTSkip tests against HealthKitWriting protocol seam
+- Ash landed `protocol HealthKitWriting` on `HealthKitService` + `FakeHealthKitWriter` (parallel to my work) — surface matched my Phase 1 ask cleanly with one adaptation: the fake records the **input `[InBodyRecord]`** per `writeWeightSamples(_:)` call, NOT per-sample `HKQuantitySample` save calls. So the metadata/date tests had to assert "recordID + scanDate flow through unchanged into recorded call args" rather than "HKMetadataKeySyncIdentifier present on saved sample". HK metadata stamping is a production-only invariant covered by integration/manual QA. Recorded the adaptation reasoning in the test comments so future readers don't think the tests are weaker than spec.
+- Concurrent test: `async let resultA / resultB` against the same fake, assert no crash + both batches recorded + aggregated written counts (5 + 7 = 12) line up. `NSLock` in fake provides the safety; HK serialization itself is an HKHealthStore property tested elsewhere.
+- Duplicate test: `fake.preExistingRecordIDs = [dup.id]` + 3 records → `written == 2`, `skippedDuplicate == 1`. Maps cleanly to the production query-first + SyncIdentifier double-protection design.
+- Result: `make test-unit` → 18 tests passing, 0 failures, 0 skipped (was 18/0/6). All Phase 1 + Phase 2 unit-test scope green.
+- **Lesson:** when an upstream seam ships in parallel, read the actual API before writing tests — Ash's fake recording shape (bulk-call records, not per-sample) differed from my mental model and would have caused 2 false-negative tests if I'd hard-coded the original spec.
+
+### 2026-05-24: Phase 2.5 complete — 18/0/0
+Ash's `HealthKitWriting` protocol + `FakeHealthKitWriter` shipped. All 6 XCTSkip tests now active. Source pending Jeff manual commit + QA. Future: HK metadata/sample-construction tests when UI test scaffolding lands.
