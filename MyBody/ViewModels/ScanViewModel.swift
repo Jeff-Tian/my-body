@@ -338,4 +338,128 @@ final class ScanViewModel {
         let count = (try? context.fetchCount(descriptor)) ?? 0
         return count > 0
     }
+
+    // MARK: - Re-parse existing report
+
+    enum ReparseError: LocalizedError {
+        case noOriginalPhoto
+        case photoNotInAlbum
+        case imageLoadFailed
+        case ocrFailed
+
+        var errorDescription: String? {
+            switch self {
+            case .noOriginalPhoto:
+                return "该记录没有关联的原始照片，无法重新识别。"
+            case .photoNotInAlbum:
+                return "原始照片已不在相册中（可能已被删除），无法重新识别。"
+            case .imageLoadFailed:
+                return "无法加载原图（可能 iCloud 原图尚未下载），请稍后再试。"
+            case .ocrFailed:
+                return "OCR 识别失败，请稍后再试。"
+            }
+        }
+    }
+
+    /// 对已有记录的原始照片重新跑一次 OCR，并就地覆盖数值字段。
+    ///
+    /// - 复用 `parseNextPhoto()` 的 OCR + 纠正快照 + useCount 累加管道。
+    /// - 不改动去重逻辑：本函数是用户显式触发的"重新识别"路径，
+    ///   绕过 PHAsset 去重并直接写回同一条记录。
+    /// - 不读写 `wasManuallyEdited` 之类的手工编辑标记（模型当前未提供该字段，
+    ///   由调用方在 UI 上做确认即可，后续可作为增强）。
+    /// - Returns: 新解析出的 `ParsedReport`，调用方可用来展示前后对比。
+    /// - Throws: `ReparseError` —— 见各 case 说明。
+    @MainActor
+    static func reparseExistingReport(
+        _ record: InBodyRecord,
+        context: ModelContext,
+        ocrService: OCRService = OCRService()
+    ) async throws -> OCRService.ParsedReport {
+        guard let assetId = record.photoAssetIdentifier, !assetId.isEmpty else {
+            throw ReparseError.noOriginalPhoto
+        }
+
+        let fetch = PHAsset.fetchAssets(withLocalIdentifiers: [assetId], options: nil)
+        guard let asset = fetch.firstObject else {
+            throw ReparseError.photoNotInAlbum
+        }
+
+        let photoService = PhotoScanService()
+        guard let image = await photoService.loadFullImage(for: asset) else {
+            throw ReparseError.imageLoadFailed
+        }
+
+        // 把已登记的 OCR 纠正读进内存快照，避免在后台线程触碰 SwiftData。
+        let snapshot: [String: [String: Double]] = {
+            let all = (try? context.fetch(FetchDescriptor<OCRCorrection>())) ?? []
+            var dict: [String: [String: Double]] = [:]
+            for row in all {
+                dict[row.fieldName, default: [:]][row.rawText] = row.correctedValue
+            }
+            return dict
+        }()
+        let lookup: (String, String) -> Double? = { field, raw in
+            snapshot[field]?[OCRCorrection.normalize(raw)]
+        }
+
+        let ocr = ocrService
+        let result: OCRService.ParsedReport? = await Task.detached(priority: .userInitiated) {
+            try? ocr.parseReport(from: image, corrections: lookup)
+        }.value
+
+        guard var parsed = result else {
+            throw ReparseError.ocrFailed
+        }
+
+        // 累加命中的纠正项使用次数（与 parseNextPhoto 保持一致）。
+        for (field, raw) in parsed.rawTexts {
+            let key = OCRCorrection.normalize(raw)
+            if snapshot[field]?[key] != nil {
+                var desc = FetchDescriptor<OCRCorrection>(
+                    predicate: #Predicate { $0.fieldName == field && $0.rawText == key }
+                )
+                desc.fetchLimit = 1
+                if let row = (try? context.fetch(desc))?.first {
+                    row.useCount += 1
+                    row.updatedAt = Date()
+                }
+            }
+        }
+
+        // scanDate 若解析未拿到，回退到 PHAsset.creationDate；再不行保留原值。
+        if parsed.scanDate == nil {
+            parsed.scanDate = asset.creationDate ?? record.scanDate
+        }
+
+        // 就地覆盖记录的数值字段 + OCR 原始文本溯源。
+        record.scanDate = parsed.scanDate ?? record.scanDate
+        record.scanTime = parsed.scanTime ?? record.scanTime
+        record.weight = parsed.weight
+        record.skeletalMuscle = parsed.skeletalMuscle
+        record.bodyFatMass = parsed.bodyFatMass
+        record.totalBodyWater = parsed.totalBodyWater
+        record.leanBodyMass = parsed.leanBodyMass
+        record.bmi = parsed.bmi
+        record.bodyFatPercent = parsed.bodyFatPercent
+        record.whr = parsed.whr
+        record.bmr = parsed.bmr
+        record.inbodyScore = parsed.inbodyScore
+        record.visceralFatLevel = parsed.visceralFatLevel
+        record.dailyCalorie = parsed.dailyCalorie
+        record.segMuscleLeftArm = parsed.segMuscleLeftArm
+        record.segMuscleRightArm = parsed.segMuscleRightArm
+        record.segMuscleTrunk = parsed.segMuscleTrunk
+        record.segMuscleLeftLeg = parsed.segMuscleLeftLeg
+        record.segMuscleRightLeg = parsed.segMuscleRightLeg
+        record.segFatLeftArm = parsed.segFatLeftArm
+        record.segFatRightArm = parsed.segFatRightArm
+        record.segFatTrunk = parsed.segFatTrunk
+        record.segFatLeftLeg = parsed.segFatLeftLeg
+        record.segFatRightLeg = parsed.segFatRightLeg
+        record.ocrRawTexts = parsed.rawTexts
+
+        try context.save()
+        return parsed
+    }
 }
