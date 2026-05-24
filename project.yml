@@ -15,12 +15,14 @@ schemes:
     build:
       targets:
         MyBody: all
+        MyBodyTests: [test]
         MyBodyUITests: [test]
     run:
       config: Debug
     test:
       config: Debug
       targets:
+        - MyBodyTests
         - MyBodyUITests
     profile:
       config: Release
@@ -43,6 +45,9 @@ targets:
         CODE_SIGN_ENTITLEMENTS: MyBody/MyBody.entitlements
         PRODUCT_BUNDLE_IDENTIFIER: brickverse.MyBodyApp
         PRODUCT_NAME: 身记
+        # PRODUCT_NAME 是中文 "身记"，Swift 模块名默认会被派生成非法标识符。
+        # 显式锁定为 MyBody，保证 `@testable import MyBody` 能解析。
+        PRODUCT_MODULE_NAME: MyBody
         DEVELOPMENT_TEAM: "${DEVELOPMENT_TEAM}"
         CODE_SIGN_STYLE: Automatic
         SUPPORTS_MACCATALYST: NO
@@ -83,3 +88,25 @@ targets:
         TARGETED_DEVICE_FAMILY: "1"
         GENERATE_INFOPLIST_FILE: YES
         TEST_TARGET_NAME: MyBody
+
+  MyBodyTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: MyBodyTests
+    dependencies:
+      - target: MyBody
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: brickverse.MyBodyAppTests
+        DEVELOPMENT_TEAM: "${DEVELOPMENT_TEAM}"
+        CODE_SIGN_STYLE: Automatic
+        SWIFT_VERSION: "5.9"
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: YES
+        # 宿主 App 的 PRODUCT_NAME 是中文 "身记"，xcodegen 自动派生的
+        # TEST_HOST / BUNDLE_LOADER 用了项目名 MyBody，需手动指向真实产物。
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/身记.app/身记"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        # MyBodyTests/Fixtures/**/*.heic 等图片文件会被自动识别为 resources
+        # 并拷贝进测试 bundle（参见 README.md 与 OCRServiceInBody230Tests）。

@@ -295,6 +295,66 @@ xcode: gen
 stop:
 	@xcrun simctl terminate booted $(BUNDLE_ID) || true
 
+# pick-sim: 内部辅助 — 解析 simctl JSON，选择已安装的最新 iOS 运行时及其下首个 iPhone。
+# 输出制表符分隔的 4 个字段: UDID<TAB>NAME<TAB>VERSION<TAB>RUNTIME_ID
+# 若该运行时下无 iPhone，会自动创建一个 iPhone 16。
+# 注意：Xcode 26.5 SDK 默认目标 iOS 26.5 runtime；若未安装，必须显式以 UDID 指定可用的旧运行时。
+define PICK_SIM_PY
+import json, subprocess, re, sys
+runtimes = json.loads(subprocess.check_output(["xcrun","simctl","list","runtimes","-j"]))["runtimes"]
+ios = [r for r in runtimes if r.get("isAvailable") and r.get("platform") == "iOS"]
+if not ios:
+    sys.exit("[pick-sim] 未找到任何已安装的 iOS 运行时")
+ios.sort(key=lambda r: tuple(int(x) for x in re.findall(r"\d+", r.get("version", "0"))), reverse=True)
+rt = ios[0]
+devs_all = json.loads(subprocess.check_output(["xcrun","simctl","list","devices","available","-j"]))["devices"]
+iphones = [d for d in devs_all.get(rt["identifier"], []) if d.get("isAvailable") and "iPhone" in d.get("name","")]
+if iphones:
+    d = iphones[0]
+    print(f"{d['udid']}\t{d['name']}\t{rt['version']}\t{rt['identifier']}")
+else:
+    dt_out = subprocess.check_output(["xcrun","simctl","list","devicetypes","-j"])
+    dts = json.loads(dt_out)["devicetypes"]
+    iphone_dts = [t for t in dts if "iPhone" in t.get("name","")]
+    if not iphone_dts:
+        sys.exit("[pick-sim] 未找到 iPhone 设备类型")
+    dt = iphone_dts[-1]
+    udid = subprocess.check_output(["xcrun","simctl","create", f"{dt['name']} (auto)", dt["identifier"], rt["identifier"]]).decode().strip()
+    print(f"{udid}\t{dt['name']} (auto)\t{rt['version']}\t{rt['identifier']}")
+endef
+export PICK_SIM_PY
+
+## test: 在模拟器中运行全量测试（unit + UI）
+.PHONY: test
+test: gen
+	@set -euo pipefail; \
+	PICK=$$(/usr/bin/python3 -c "$$PICK_SIM_PY"); \
+	SIM_UDID=$$(echo "$$PICK" | awk -F'\t' '{print $$1}'); \
+	SIM_NAME=$$(echo "$$PICK" | awk -F'\t' '{print $$2}'); \
+	SIM_VER=$$(echo "$$PICK" | awk -F'\t' '{print $$3}'); \
+	if [ -z "$$SIM_UDID" ]; then echo "[test] 找不到可用 iPhone 模拟器" >&2; exit 1; fi; \
+	echo "[test] 使用模拟器: $$SIM_NAME (iOS $$SIM_VER, $$SIM_UDID)"; \
+	xcodebuild test -scheme $(SCHEME) -project $(PROJECT) \
+		-destination "platform=iOS Simulator,id=$$SIM_UDID" \
+		-derivedDataPath $(DERIVED_DATA) \
+		CODE_SIGNING_ALLOWED=NO $(LOG_PIPE)
+
+## test-unit: 只跑单元测试（MyBodyTests，快速迭代）
+.PHONY: test-unit
+test-unit: gen
+	@set -euo pipefail; \
+	PICK=$$(/usr/bin/python3 -c "$$PICK_SIM_PY"); \
+	SIM_UDID=$$(echo "$$PICK" | awk -F'\t' '{print $$1}'); \
+	SIM_NAME=$$(echo "$$PICK" | awk -F'\t' '{print $$2}'); \
+	SIM_VER=$$(echo "$$PICK" | awk -F'\t' '{print $$3}'); \
+	if [ -z "$$SIM_UDID" ]; then echo "[test-unit] 找不到可用 iPhone 模拟器" >&2; exit 1; fi; \
+	echo "[test-unit] 使用模拟器: $$SIM_NAME (iOS $$SIM_VER, $$SIM_UDID)"; \
+	xcodebuild test -scheme $(SCHEME) -project $(PROJECT) \
+		-destination "platform=iOS Simulator,id=$$SIM_UDID" \
+		-derivedDataPath $(DERIVED_DATA) \
+		-only-testing:MyBodyTests \
+		CODE_SIGNING_ALLOWED=NO $(LOG_PIPE)
+
 ## clean: 清理构建产物
 .PHONY: clean
 clean:

@@ -274,14 +274,21 @@ final class OCRService: Sendable {
     /// 在 boxes 中寻找匹配 keys 之一的标签,并返回其最可能对应的数值。
     ///
     /// InBody 报告的典型行布局:
-    ///   `[标签] [参考范围 X.X~Y.Y] [柱状图] [实测值 X.X kg]`
+    ///   `[标签] [参考范围 X.X~Y.Y] [柱状图轴刻度 40 55 70 85 ...] [实测值 X.X kg]`
     /// 或嵌套形式: `身体水分总量 41.5kg(30.3~37.0)`
     ///
-    /// 策略(按优先级):
-    ///   1. 标签自带的主数值(排除括号内范围)
-    ///   2. 同行右侧所有数字候选 → 跳过"纯范围"文本 → 在期望区间内、最靠右的一个
-    ///   3. 若期望区间没命中,退而求其次取同行右侧任意合理数字
-    ///   4. 正下方列的数字(表头/数据两行布局)
+    /// **关键陷阱**(2026-05-24 修复):柱状图的轴刻度(整数 40/55/70/85...)
+    /// 全部落在宽松的 `expected` 区间里。旧实现取"第一个落在区间内的候选",
+    /// 因此实测值永远拿不到 —— 第一个轴刻度就把它挤掉了。
+    ///
+    /// 新策略(Plan A + Plan B):
+    ///   - **Plan B**:先在同行扫一遍打印出的"正常范围"box(如 `53.4~72.3`),
+    ///     把字段的 `expected` 临时收紧到 `low×0.5 ... high×1.5`,
+    ///     直接砍掉远端轴刻度(如 weight 行的 115/130/145)。
+    ///   - **Plan A**:对剩下的同行右侧候选,按"含单位 / 是小数 / box 字号大 /
+    ///     最右侧"加分,对"等距整数群(轴刻度特征)"扣分,取最高分。
+    ///   - 若 Plan A/B 全部失效 → 退回旧的 distance-to-range + below-column 兜底,
+    ///     保证 BMI / WHR / BMR 等无柱状图字段不受影响。
     private func findValue(
         for keys: [String],
         in boxes: [TextBox],
@@ -309,45 +316,68 @@ final class OCRService: Sendable {
                 return (n, label.text)
             }
 
-            // 2. 同行右侧,在期望区间内的候选
             let rowTol = max(label.box.height, 0.012) * 1.8
-            let rowNumbers: [(Double, CGFloat, String)] = boxes
-                .filter { $0.left > label.right - 0.005 }
+
+            // ── Plan B:同行印刷范围 sanity check ────────────────────────────
+            // 扫描同行被 `isPureRange` 过滤的 box,解析成 (low, high)。
+            // 把字段 `expected` 临时收紧到 [low × 0.5, high × 1.5],
+            // 这一步把柱状图远端轴刻度(115/130/145)直接砍掉。
+            let rowRange = boxes
                 .filter { abs($0.cy - label.cy) < rowTol }
-                .compactMap { b in
-                    guard let n = primaryNumber(in: b.text, excludingKeys: keys) else { return nil }
-                    return (n, b.cx, b.text)
-                }
-            // 期望区间内的候选,挑最靠左(通常第一个命中就是正确的)
-            // 注意 InBody 230 的范围下界(例如 53.4)可能也落在 weight 区间里,
-            // 所以要过滤掉来自"纯范围"的 box
-            let rowFiltered: [(Double, CGFloat, String)] = boxes
+                .filter { isPureRange($0.text) }
+                .compactMap { parsePrintedRange($0.text) }
+                .first
+            let narrowed: ClosedRange<Double> = {
+                guard let r = rowRange else { return expected }
+                let lo = max(expected.lowerBound, r.lowerBound * 0.5)
+                let hi = min(expected.upperBound, r.upperBound * 1.5)
+                return lo < hi ? lo...hi : expected
+            }()
+
+            // 同行右侧、非"纯范围"的所有数字候选(保留 TextBox 用于评分:高度、位置)
+            let rowCandidates: [(value: Double, box: TextBox)] = boxes
                 .filter { $0.left > label.right - 0.005 }
                 .filter { abs($0.cy - label.cy) < rowTol }
                 .filter { !isPureRange($0.text) }
                 .compactMap { b in
                     guard let n = primaryNumber(in: b.text, excludingKeys: keys) else { return nil }
+                    return (n, b)
+                }
+
+            // ── Plan A:候选评分 ─────────────────────────────────────────────
+            // 在 narrowed 区间内的候选先做评分;若全军覆没再回到 expected。
+            let inNarrowed = rowCandidates.filter { narrowed.contains($0.value) }
+            let inExpected = rowCandidates.filter { expected.contains($0.value) }
+            let pool = !inNarrowed.isEmpty ? inNarrowed : inExpected
+
+            if !pool.isEmpty {
+                if let best = pickHighestScoring(pool, allRowCandidates: rowCandidates) {
+                    return (best.value, best.box.text)
+                }
+            }
+
+            // ── 兜底 1:仍有行内候选 → 取距离 expected 最近的(老逻辑) ─────────
+            if !rowCandidates.isEmpty {
+                if let best = rowCandidates.min(by: {
+                    distanceToRange($0.value, expected) < distanceToRange($1.value, expected)
+                }), distanceToRange(best.value, expected) <= expected.upperBound * 0.5 {
+                    return (best.value, best.box.text)
+                }
+            }
+
+            // ── 兜底 2:允许"纯范围" box 中的主数字(BMI / WHR 等无范围字段) ──
+            let rowNumbersIncludingRange: [(Double, CGFloat, String)] = boxes
+                .filter { $0.left > label.right - 0.005 }
+                .filter { abs($0.cy - label.cy) < rowTol }
+                .compactMap { b in
+                    guard let n = primaryNumber(in: b.text, excludingKeys: keys) else { return nil }
                     return (n, b.cx, b.text)
                 }
-
-            if let hit = rowFiltered.first(where: { expected.contains($0.0) }) {
+            if let hit = rowNumbersIncludingRange.first(where: { expected.contains($0.0) }) {
                 return (hit.0, hit.2)
             }
 
-            // 3. 仍没有命中区间,但有行内候选 → 取期望区间内最接近的,或第一个
-            if !rowFiltered.isEmpty {
-                if let best = rowFiltered.min(by: { distanceToRange($0.0, expected) < distanceToRange($1.0, expected) }),
-                   distanceToRange(best.0, expected) <= expected.upperBound * 0.5 {
-                    return (best.0, best.2)
-                }
-            }
-
-            // 4. 再宽松一点:允许范围 box(有些小字段如 BMI 没有范围,避免误判)
-            if let hit = rowNumbers.first(where: { expected.contains($0.0) }) {
-                return (hit.0, hit.2)
-            }
-
-            // 5. 正下方列(表头/数据两行布局,少见但保留)
+            // ── 兜底 3:正下方列(表头/数据两行布局,少见但保留) ───────────────
             let colTol: CGFloat = 0.05
             let below: [(Double, CGFloat, String)] = boxes
                 .filter { $0.cy < label.cy - label.box.height * 0.3 }
@@ -364,6 +394,111 @@ final class OCRService: Sendable {
         }
 
         return nil
+    }
+
+    /// 候选评分器(Plan A 核心)。
+    ///
+    /// 权重设计:
+    ///   - **+4**:文本含 `kg` / `%` / `kcal` 等单位 —— 实测值几乎一定带单位,
+    ///     轴刻度几乎一定不带。
+    ///   - **+2**:值是小数(原始文本含 `.`) —— 实测值通常小数,刻度通常整数。
+    ///   - **+2**:box 高度位于行内候选的上四分位 —— 实测值字号通常 2-3× 于刻度。
+    ///   - **+1**:本候选是行内最靠右的 —— 实测值通常在 bar 末端。
+    ///   - **-5**:命中"等距整数群"(3+ 个整数候选间距大致相等) —— 轴刻度特征。
+    ///
+    /// 等距判定:取候选中所有整数,按 cx 排序,若 3+ 个且相邻 cx 间距的
+    /// (max-min)/mean < 0.4,则判为等差数列;序列里的每个值都扣分。
+    private func pickHighestScoring(
+        _ pool: [(value: Double, box: TextBox)],
+        allRowCandidates: [(value: Double, box: TextBox)]
+    ) -> (value: Double, box: TextBox)? {
+        guard !pool.isEmpty else { return nil }
+
+        // 上四分位高度阈值(用整行候选,不仅 pool 内,因为轴刻度也算行内)
+        let heights = allRowCandidates.map { $0.box.box.height }.sorted()
+        let q3Height: CGFloat = heights.isEmpty
+            ? 0
+            : heights[min(heights.count - 1, (heights.count * 3) / 4)]
+
+        // 等距整数群检测:整行候选里的整数 cx 是否近似等差
+        let intCandidates = allRowCandidates
+            .filter { $0.value.truncatingRemainder(dividingBy: 1) == 0 }
+            .sorted { $0.box.cx < $1.box.cx }
+        let axisValueSet: Set<Double> = {
+            guard intCandidates.count >= 3 else { return [] }
+            let xs = intCandidates.map { $0.box.cx }
+            var gaps: [CGFloat] = []
+            for i in 1..<xs.count { gaps.append(xs[i] - xs[i - 1]) }
+            let meanGap = gaps.reduce(0, +) / CGFloat(gaps.count)
+            guard meanGap > 0.001 else { return [] }
+            let spread = (gaps.max()! - gaps.min()!) / meanGap
+            // 间距相对均匀(spread < 0.4) → 视为坐标轴
+            return spread < 0.4 ? Set(intCandidates.map { $0.value }) : []
+        }()
+
+        // 最右候选(用 pool 而不是 allRow,保证落在合理区间内)
+        let rightmostCx = pool.map { $0.box.cx }.max() ?? 0
+
+        struct Scored {
+            let value: Double
+            let box: TextBox
+            let score: Int
+        }
+
+        let scored: [Scored] = pool.map { cand in
+            var s = 0
+            let txt = cand.box.text
+            // +4 单位
+            if txt.range(of: #"(kg|KG|Kg|%|kcal|Kcal|KCAL)"#, options: .regularExpression) != nil {
+                s += 4
+            }
+            // +2 小数
+            if txt.contains(".") && cand.value.truncatingRemainder(dividingBy: 1) != 0 {
+                s += 2
+            }
+            // +2 字号位于上四分位
+            if cand.box.box.height >= q3Height && q3Height > 0 {
+                s += 2
+            }
+            // +1 最右
+            if abs(cand.box.cx - rightmostCx) < 0.005 {
+                s += 1
+            }
+            // -5 等距整数群成员
+            if axisValueSet.contains(cand.value) {
+                s -= 5
+            }
+            return Scored(value: cand.value, box: cand.box, score: s)
+        }
+
+        // 取最高分;若并列,取最右
+        let best = scored.max { lhs, rhs in
+            if lhs.score != rhs.score { return lhs.score < rhs.score }
+            return lhs.box.cx < rhs.box.cx
+        }
+        // 若所有候选都被打成负分,放弃由兜底逻辑接手
+        guard let winner = best, winner.score >= 0 else { return nil }
+        return (winner.value, winner.box)
+    }
+
+    /// 把一段被判定为 `isPureRange` 的文本解析回 (low, high)。
+    /// 例:`"53.4~72.3"` / `"8.5-15.1kg"` / `"26.8～32.7"` → (53.4, 72.3) 等。
+    private func parsePrintedRange(_ text: String) -> ClosedRange<Double>? {
+        let cleaned = text
+            .replacingOccurrences(of: " ", with: "")
+            .replacingOccurrences(of: "～", with: "~")
+            .replacingOccurrences(of: "∼", with: "~")
+            .replacingOccurrences(of: "—", with: "-")
+            .replacingOccurrences(of: "–", with: "-")
+        let pattern = #"(-?\d+(?:\.\d+)?)[~\-](-?\d+(?:\.\d+)?)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let m = regex.firstMatch(in: cleaned, range: NSRange(location: 0, length: (cleaned as NSString).length)),
+              m.numberOfRanges >= 3 else { return nil }
+        let ns = cleaned as NSString
+        guard let lo = Double(ns.substring(with: m.range(at: 1))),
+              let hi = Double(ns.substring(with: m.range(at: 2))),
+              lo <= hi, lo > 0 else { return nil }
+        return lo...hi
     }
 
     /// 数字到期望区间的距离(区间内为 0)。

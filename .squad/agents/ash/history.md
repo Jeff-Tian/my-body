@@ -29,3 +29,14 @@
     3. 加 Parker 回归 fixture:用 `IMG_2245.HEIC` 的 OCR `[TextBox]` dump 锁住 `weight=68.1 / skeletalMuscle=31.7 / bodyFatMass=12.0`。
   - 经验教训:**`expected` 区间太宽 + first-match-wins 是 OCR 字段解析的常见反模式**。宽区间为机型差异留余地是对的,但选择器必须从"区间过滤 + first" 升级为"区间过滤 + 候选评分"。下次设计任何 spatial-OCR 字段解析时直接上评分函数,别再用 first。
   - 受影响字段范围:所有带横向 bar chart 的主指标(weight / skeletalMuscle / bodyFatMass / 可能还有 totalBodyWater / bodyFatPercent / leanBodyMass)。BMI / WHR / BMR / 内脏脂肪等级等纯文本字段不受影响。
+
+- 2026-05-24: **InBody OCR axis-scale fix landed (Plan A + B)** in `OCRService.swift`. Replaced `rowFiltered.first(where: expected.contains)` with a two-stage pipeline:
+  1. **Plan B (range narrowing)**: scan same-row `isPureRange` boxes, parse first one via new `parsePrintedRange` → `(low, high)`, narrow field's expected to `[low×0.5, high×1.5]` ∩ original. Kills far axis ticks pre-scoring.
+  2. **Plan A (scoring)**: new `pickHighestScoring(pool, allRowCandidates)`. Weights: +4 unit (`kg|%|kcal`), +2 decimal (text contains `.` AND non-integer), +2 Q3 box height, +1 rightmost cx, **-5 equidistant integer group** (3+ ints, gap-spread < 0.4 → axis ticks). Tie-break: rightmost. Negative winner → bypass to legacy fallback.
+  - **Design call (recorded in `.squad/decisions/inbox/ash-ocr-scoring-impl.md`)**: kept scoring inline in `OCRService` rather than extracting an `OCRScorer` service — only one consumer, surgical change. If Ripley wants it moved later, the function shape is already pure-functional (no instance state).
+  - **Q3 height fallback**: `q3Height = 0` if degenerate → skip the +2 bonus instead of div-by-zero.
+  - **Equidistant detection**: requires `meanGap > 0.001` to guard against all-zero-cx degraded inputs.
+  - Build: `make build` (iphonesimulator) → Succeeded; only pre-existing `usesCPUOnly` warning.
+  - Fields with bar charts now expected-correct: weight, skeletalMuscle, bodyFatMass, totalBodyWater, leanBodyMass, bodyFatPercent. BMI/WHR/BMR/inbodyScore/visceralFatLevel unaffected (no `isPureRange` box on those rows → Plan B no-ops, scoring still right because those fields have no axis ticks).
+  - **Lesson reinforced**: scoring with explicit penalties for distractors (axis-tick -5) is more robust than narrowing the legitimate signal. Don't tighten `expected` permanently — narrow per-row via printed evidence.
+  - Pending: Parker's `IMG_2245.HEIC` box-dump fixture for regression lock-in (decisions.md target: weight=68.1 / skeletalMuscle=31.7 / bodyFatMass=12.0).

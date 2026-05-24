@@ -1,0 +1,2 @@
+# Keep the fixtures directory tracked in git even when no fixtures have
+# been committed yet. Remove this file once real fixtures land.
