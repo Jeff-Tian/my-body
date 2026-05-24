@@ -1,10 +1,14 @@
 import SwiftUI
 import SwiftData
+import PhotosUI
 
 struct HomeView: View {
     @Environment(\.modelContext) private var modelContext
     @State private var viewModel = HomeViewModel()
     @State private var showImport = false
+    @State private var showSinglePicker = false
+    @State private var pickedItem: PhotosPickerItem?
+    @State private var showSingleImport = false
 
     var body: some View {
         NavigationStack {
@@ -43,8 +47,17 @@ struct HomeView: View {
                 .background(Color.appBackground)
 
                 // FAB
-                Button {
-                    showImport = true
+                Menu {
+                    Button {
+                        showImport = true
+                    } label: {
+                        Label("扫描相册", systemImage: "photo.on.rectangle.angled")
+                    }
+                    Button {
+                        showSinglePicker = true
+                    } label: {
+                        Label("选择单张照片", systemImage: "photo")
+                    }
                 } label: {
                     Label("导入报告", systemImage: "plus")
                         .font(.headline)
@@ -68,6 +81,25 @@ struct HomeView: View {
                 viewModel.fetchRecords()
             } content: {
                 PhotoScanView()
+            }
+            .photosPicker(
+                isPresented: $showSinglePicker,
+                selection: $pickedItem,
+                matching: .images,
+                photoLibrary: .shared()
+            )
+            .onChange(of: pickedItem) { _, newItem in
+                if newItem != nil {
+                    showSingleImport = true
+                }
+            }
+            .sheet(isPresented: $showSingleImport) {
+                pickedItem = nil
+                viewModel.fetchRecords()
+            } content: {
+                if let item = pickedItem {
+                    SinglePhotoImportView(item: item)
+                }
             }
         }
     }

@@ -9,6 +9,13 @@
 
 <!-- Append new learnings below. Each entry is something lasting about the project. -->
 
+### 2026-05-24 — Single-photo import (HomeView FAB Menu)
+- **PhotosPicker + PHAsset dedup:** When `PhotosPicker(photoLibrary: .shared())` is used, the resulting `PhotosPickerItem.itemIdentifier` returns the PHAsset `localIdentifier`. This lets us reuse the existing batch-scan pipeline (which dedups on `photoAssetIdentifier`) for picker-selected photos — no schema change required.
+- **Menu-based FAB pattern:** When adding an alternative entry point to an existing primary action, prefer `Menu` over a confirmation dialog. The FAB label stays the same ("导入报告"), and tapping reveals two options ("扫描相册" / "选择单张照片"). Discoverable, system-native, doesn't break muscle memory.
+- **Dual-path import in ScanViewModel.startSingleImport:** Fast path uses PHAsset (reuses `parseNextPhoto`, preserves dedup + creation-date fallback). Slow path falls back to raw `Data` via `item.loadTransferable` when `itemIdentifier` is nil (limited-access album scenarios) — saves with `assetIdentifier: nil`, scanDate left blank for user fix-up.
+- **SinglePhotoImportView:** Standalone sheet that hosts only the parsing UI (mirror of PhotoScanView's `parsingView`) — keeps PhotoScanView untouched and avoids mixing batch + single concerns in one view. Owns its own `ScanViewModel` instance; dismisses on `viewModel.batchFinished`.
+- **xcodegen auto-pickup:** `project.yml` uses `sources: [path: MyBody]`, so new `.swift` files under `MyBody/` are auto-included after `make gen` — no manual project edits.
+
 ## Codebase (discovered 2026-05-15)
 
 - iOS 17+ Xcode project at root: `MyBody.xcodeproj` (generated via xcodegen — `project.yml`).

@@ -217,6 +217,118 @@ final class ScanViewModel {
         duplicateCount = 0
     }
 
+    /// 单张照片导入：跳过相册扫描和确认网格,直接对一张图片走 OCR/保存流程。
+    /// - 优先用 PHAsset 路径（与批量扫描一致,保留按 localIdentifier 去重）。
+    /// - 若 itemIdentifier 为 nil（受限相册访问等场景）,退化为 Data 路径,
+    ///   保存时 assetIdentifier 留空,不做去重检查。
+    func startSingleImport(itemIdentifier: String?, fallbackImageData: Data?) async {
+        reset()
+        isParsing = true
+        parseStageMessage = "正在加载图片…"
+
+        // 快路径:能拿到 PHAsset 就走批量管道,自动享有去重/创建日期回填
+        if let id = itemIdentifier {
+            let fetch = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil)
+            if let asset = fetch.firstObject {
+                let thumb = await photoService.loadFullImage(for: asset)
+                currentThumbnail = thumb
+                currentAsset = asset
+                var photo = ScannedPhoto(asset: asset, thumbnail: thumb)
+                photo.isSelected = true
+                scannedPhotos = [photo]
+                currentParseIndex = 0
+                await parseNextPhoto()
+                return
+            }
+        }
+
+        // 慢路径:只有原始 Data 时直接构造 UIImage 跑 OCR,不走 PHAsset 通路
+        if let data = fallbackImageData, let image = UIImage(data: data) {
+            await parseSingleDataImage(image)
+            batchFinished = true
+            isParsing = false
+            return
+        }
+
+        // 既没有 asset 也没有 data —— 视为加载失败
+        skippedCount += 1
+        batchFinished = true
+        isParsing = false
+    }
+
+    /// Data 路径专用的 OCR + 保存流程。与 parseNextPhoto 主体保持一致,
+    /// 但跳过 PHAsset 相关步骤（去重/创建日期回填/asset 缩略图）。
+    private func parseSingleDataImage(_ image: UIImage) async {
+        currentThumbnail = image
+        parseStageMessage = "正在识别文字…"
+
+        let ocr = ocrService
+        let snapshot: [String: [String: Double]] = {
+            guard let context = modelContext else { return [:] }
+            let all = (try? context.fetch(FetchDescriptor<OCRCorrection>())) ?? []
+            var dict: [String: [String: Double]] = [:]
+            for row in all {
+                dict[row.fieldName, default: [:]][row.rawText] = row.correctedValue
+            }
+            return dict
+        }()
+        let lookup: (String, String) -> Double? = { field, raw in
+            snapshot[field]?[OCRCorrection.normalize(raw)]
+        }
+
+        let result: OCRService.ParsedReport = await Task.detached(priority: .userInitiated) {
+            do {
+                return try ocr.parseReport(from: image, corrections: lookup)
+            } catch {
+                var failed = OCRService.ParsedReport()
+                failed.failedFields = Set(["all"])
+                return failed
+            }
+        }.value
+
+        // 回到主 actor 累加 useCount
+        if let context = modelContext {
+            for (field, raw) in result.rawTexts {
+                let key = OCRCorrection.normalize(raw)
+                if snapshot[field]?[key] != nil {
+                    var desc = FetchDescriptor<OCRCorrection>(
+                        predicate: #Predicate { $0.fieldName == field && $0.rawText == key }
+                    )
+                    desc.fetchLimit = 1
+                    if let row = (try? context.fetch(desc))?.first {
+                        row.useCount += 1
+                        row.updatedAt = Date()
+                    }
+                }
+            }
+            try? context.save()
+        }
+
+        var finalReport = result
+        // 没有 PHAsset.creationDate 可用,留空让用户后续手动补
+        if finalReport.scanDate == nil {
+            finalReport.scanDate = nil
+        }
+
+        if let context = modelContext {
+            let photoData = image.jpegData(compressionQuality: 0.7)
+            let record = finalReport.toRecord(photoData: photoData, assetIdentifier: nil)
+            context.insert(record)
+            try? context.save()
+            savedCount += 1
+
+            if UserDefaults.standard.bool(forKey: "syncWeightToHealth"),
+               let weight = record.weight {
+                let date = record.scanDate
+                Task.detached {
+                    try? await HealthKitService.shared.saveWeight(weight, date: date)
+                }
+            }
+        }
+
+        parseStageMessage = ""
+    }
+
     /// 判断相册 assetId 是否已存在对应的 InBodyRecord，用于批量导入去重。
     private func recordExists(forAssetId assetId: String, in context: ModelContext) -> Bool {
         var descriptor = FetchDescriptor<InBodyRecord>(
