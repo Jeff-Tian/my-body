@@ -261,3 +261,37 @@ None of these would have been solved by reweighting the scoring function. Each g
 - **`competitorRight` is now a load-bearing invariant in findValue.** Any new FieldSpec must list ALL of its label aliases in `keys` so the competitor lookup is symmetric — otherwise siblings can bleed in either direction.
 - **`rowRange` picks the cy-closest pure-range box, not the first one in iteration order.** Don't revert to `.first` without re-running the InBody 230 regression.
 
+
+### 2026-05-24 — IMG_2245 axisScaleRegression: 4 surgical fixes, 2 fields unrecoverable
+**By:** Ash (Core/Vision/OCR) — requested by Jeff Tian
+**What changed in `MyBody/Services/OCRService.swift`:**
+1. **Pattern D (hard-narrowing skip)** — when a printed range narrows the candidate pool to empty AND `rowRange != nil`, `continue` instead of falling back to the lenient `inExpected` pool. Scoped to chart-bearing fields so BMI/WHR/BMR-style fields (no rowRange) keep their lenient fallback.
+2. **Pattern E (cy-proximity bonus)** — `pickHighestScoring` now awards +2 when candidate cy is within `rowTol × 0.4` of label cy. `rowTol = max(label.height, 0.012) × 1.8` is generous enough to admit adjacent rows, and the existing +1 "rightmost" bonus could tip ties to the wrong row. cy-proximity disambiguates.
+3. **Fix 3 (formula-label skip)** — drop labels whose text contains `=`, `×`, or `÷`. InBody reports include formula text like `=一体脂肪×100`; substring matching wrongly admitted it as a `体脂肪` label.
+4. **Fix 4 (competitor-key substring guard)** — drop labels where any competitor key matches with LONGER substring than the field's own keys. Stops `去脂体重` (leanBodyMass) being treated as a `体重` (weight) label.
+**Result:** 3 of 5 assertions pass (skeletalMuscle=31.7, totalBodyWater=41.2, leanBodyMass=56.1). `weight` and `bodyFatMass` return nil because Vision's OCR output does not contain those truth values for IMG_2245 (`w00.1kg` not `68.1kg`; no box contains `12.0`). Pattern F (next entry) recovers `weight` via authoritative source.
+
+### 2026-05-24 — Pattern F: Exercise Prescription Footer is Authoritative for Weight
+**By:** Jeff Tian (via Ash)
+**What:** In `OCRService.swift` parser, treat the "运动处方" footer text ("基础体重：68.1 kg") as the **trusted override** for the `weight` field. When the helper `extractWeightFromExercisePrescription` returns a value, it replaces whatever the bar-chart row produced (no nil-gating).
+**Why:** The bar-chart row at cy≈0.75 is frequently misread by Vision (e.g. "w00.1kg", or chart-axis scale "238"). The exercise-prescription paragraph at cy≈0.30 is normal print-quality text and reads reliably. On IMG_2245.HEIC the chart-row pathway produced 238.0 (junk in valid range, no kg suffix), so the previous nil-fallback never fired. Switching to trusted override yields weight=68.1 on IMG_2245 with no regression on the bundle fixture.
+**Notes:** Helper validates range 20…250 and normalizes "68. 1 kg" → "68.1 kg". If the prescription paragraph is absent (old/cropped reports), helper returns nil and the chart-row value passes through unchanged. **Meta-lesson:** when a parser pathway can emit plausible-but-wrong numbers, `nil`-gated fallbacks won't save you — use a trusted override when an authoritative alternative source exists in the document.
+
+### 2026-05-24 — Re-OCR existing reports via `ScanViewModel.reparseExistingReport`
+**By:** Ash
+**What:** Added `@MainActor static func reparseExistingReport(_ record: InBodyRecord, context: ModelContext, ocrService: OCRService = OCRService()) async throws -> OCRService.ParsedReport` on `ScanViewModel`. Throws `ScanViewModel.ReparseError` (noOriginalPhoto / photoNotInAlbum / imageLoadFailed / ocrFailed) with 中文 messages.
+**Why:** Records imported with the old parser still hold wrong values (e.g. 55kg vs 68.1kg). User triggers "重新识别" from `DetailView`; we fetch the original PHAsset via `photoAssetIdentifier`, re-OCR with the current parser + OCRCorrection snapshot, and overwrite numeric fields + `ocrRawTexts` in place. Dedup-by-localIdentifier path is untouched — this is the explicit escape hatch.
+**Caveats:** No manual-edit-tracking yet. Overwrites unconditionally; UI layer is responsible for confirmation. Future: add per-field `wasManuallyEdited` flags to preserve user edits across re-parse.
+
+### 2026-05-24 — "重新识别" toolbar button in DetailView
+**By:** Lambert — requested by Jeff Tian
+**Files:** `MyBody/Views/Detail/DetailView.swift` (+~95 lines net)
+**What:** Toolbar button (placed before edit, before delete in `topBarTrailing`) triggers re-OCR flow: confirm alert → `ultraThinMaterial` progress overlay → success capsule banner (`Color.appGreen`, 1.8s, `move(.top).combined(.opacity)`) / error alert. Disabled when `record.photoAssetIdentifier == nil` or `isReparsing == true`; edit/delete also disabled during execution.
+**Interface to Ash:** `_ = try await ScanViewModel.reparseExistingReport(record, context: modelContext, ocrService: OCRService())`. Errors prefer `as? ScanViewModel.ReparseError` (中文 LocalizedError), then Photos-domain fallback, then `localizedDescription`.
+**Key decisions:** Used actual model field `photoAssetIdentifier` (spawn prompt incorrectly said `assetId`). Button order "重新识别 → 编辑 → 删除" progresses automatic → manual → destructive.
+**Tests:** `make test-unit` 2/2 green.
+
+### 2026-05-24 — Embed Git commit hash in app, display in Settings
+**By:** Jeff Tian (coordinator-implemented, not via agent spawn)
+**Files:** `project.yml` (postCompileScript "Embed Git Commit Hash"), `MyBody/Views/SettingsView.swift` (display row).
+**Why:** Users / Jeff need to identify which build is installed when reproducing OCR misreads or other bugs. xcodegen postCompile writes the short SHA into Info.plist; SettingsView reads it back via `Bundle.main.infoDictionary`. No code-signed runtime fetch; pure build-time stamp.

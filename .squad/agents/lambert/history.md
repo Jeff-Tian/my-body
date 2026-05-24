@@ -26,3 +26,17 @@
 - Fastlane for App Store screenshots + release automation.
 - Localization: `MyBody/Localizable.xcstrings` (zh-Hans primary per README).
 - Roadmaps: `docs/ocr-learning-roadmap.md`, `docs/i18n-roadmap.md`, `docs/release.md`.
+
+## Learnings
+
+### 2026-05-24 — 重新识别 (re-OCR) 按钮 (DetailView)
+
+- **Task:** 在报告详情页 toolbar 加 "重新识别" 按钮：确认 alert → 进度遮罩 → 成功 banner / 错误 alert。
+- **File changed:** `MyBody/Views/Detail/DetailView.swift` (+~95 行净增)
+- **Key field name:** 原始照片标识用 `record.photoAssetIdentifier`（spawn 提示里的 `assetId` 不存在）。
+- **Button placement:** `topBarTrailing` 内排列为「重新识别 → 编辑 → 删除」，从自动→手动→破坏性。
+- **Disable rules:** 无 `photoAssetIdentifier` 或 `isReparsing` 时禁用；执行中也禁用 edit / delete。
+- **Visual style:** `ultraThinMaterial` 圆角进度遮罩；`Color.appGreen` capsule banner；`move(.top).combined(.opacity)` 过渡。
+- **Error handling pattern:** 先 `as? ScanViewModel.ReparseError`（已是 `LocalizedError`，中文文案完整），再 Photos 域兜底，最后 `localizedDescription`。
+- **Coordination:** Ash 并行交付 `ScanViewModel.reparseExistingReport(_:context:ocrService:) async throws -> OCRService.ParsedReport`；UI 用 `_ = try await` 丢弃返回值。
+- **Test status:** `make test-unit` 通过（2 tests, 0 failures）。
