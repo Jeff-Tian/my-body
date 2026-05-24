@@ -19,3 +19,5 @@
 - Fastlane for App Store screenshots + release automation.
 - Localization: `MyBody/Localizable.xcstrings` (zh-Hans primary per README).
 - Roadmaps: `docs/ocr-learning-roadmap.md`, `docs/i18n-roadmap.md`, `docs/release.md`.
+
+- 2026-05-24: New single-photo import path landed via HomeView FAB Menu + `SinglePhotoImportView` + `ScanViewModel.startSingleImport`. Test surface to consider: PHAsset fast path (with identifier) vs Data fallback (assetIdentifier: nil, limited-access albums); new sheet UI on HomeView.
