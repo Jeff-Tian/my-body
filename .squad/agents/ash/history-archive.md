@@ -101,3 +101,40 @@ Lives on `ScanViewModel` (static — no need to instantiate full VM). Error type
 
 **Tests:** `make test-unit` 2/2 green. No regression in OCRServiceInBody230Dump or InBody230 axis-scale tests.
 
+
+---
+
+## 2026-05-24 — InBody OCR axis-scale fix landed (Plan A + B) [archived from history.md]
+
+Replaced `rowFiltered.first(where: expected.contains)` in `OCRService.swift` with a two-stage pipeline:
+1. **Plan B (range narrowing)**: scan same-row `isPureRange` boxes, parse first one via new `parsePrintedRange` → `(low, high)`, narrow field's expected to `[low×0.5, high×1.5]` ∩ original. Kills far axis ticks pre-scoring.
+2. **Plan A (scoring)**: new `pickHighestScoring(pool, allRowCandidates)`. Weights: +4 unit (`kg|%|kcal`), +2 decimal (text contains `.` AND non-integer), +2 Q3 box height, +1 rightmost cx, **-5 equidistant integer group** (3+ ints, gap-spread < 0.4 → axis ticks). Tie-break: rightmost. Negative winner → bypass to legacy fallback.
+
+- Design call: kept scoring inline in `OCRService` rather than extracting `OCRScorer` — only one consumer, surgical change. Function shape is pure-functional (no instance state) if Ripley wants it moved later.
+- `q3Height = 0` if degenerate → skip the +2 bonus instead of div-by-zero.
+- Equidistant detection requires `meanGap > 0.001` (guard against all-zero-cx degraded inputs).
+- Build: `make build` (iphonesimulator) ✅; only pre-existing `usesCPUOnly` warning.
+- Fields with bar charts now expected-correct: weight, skeletalMuscle, bodyFatMass, totalBodyWater, leanBodyMass, bodyFatPercent. BMI/WHR/BMR/inbodyScore/visceralFatLevel unaffected.
+- **Lesson reinforced:** scoring with explicit penalties for distractors (axis-tick -5) is more robust than narrowing the legitimate signal. Don't tighten `expected` permanently — narrow per-row via printed evidence.
+- **Future:** If we add `wasManuallyEdited: Bool` per-field flags, the function should preserve manually-edited fields by default.
+
+## 2026-05-24 — HealthKit batch-write survey (Phase 1) [archived]
+- Existing `HealthKitService` writes one bodyMass sample per call via `saveWeight(_:date:)`; no dedupe metadata, no batch API. All 3 callers (ScanVM × 2, EditRecordView) use `try?`.
+- Entitlements + Info.plist already correct (HealthKit cap on, NSHealthUpdateUsageDescription / NSHealthShareUsageDescription cover writes).
+- Data model is `InBodyRecord`; weight `Double?` (kg), date `scanDate: Date`, identity `id: UUID` → use UUID as `HKMetadataKeySyncIdentifier` for idempotent re-writes.
+- Phase-2 API drafted: `writeWeightSamples(_ records:[InBodyRecord]) async throws -> HealthKitWriteResult` (written / skippedDuplicate / skippedInvalid / failed). Pre-flight throws; per-sample errors collected.
+- Flagged for Ripley: `HKMetadataKeyWasUserEntered=true` for OCR-derived samples is questionable; whether single-record callers should migrate to the batch API.
+
+## 2026-05-24 — Team note: Trends Weight → Health Phase 1 [archived]
+Cross-agent Phase 1 planning landed in `.squad/decisions.md` (4 entries dated 2026-05-24). Two open arbitrations (dedup mechanism, `HKMetadataKeyWasUserEntered`) resolved by Ripley before API freeze.
+
+## 2026-05-24 — Weight→Health Phase 2 implementation [archived]
+- Added `HealthKitWriteResult` (written / skippedInvalid / skippedDuplicate / failed:[(UUID,Error)]) + `writeWeightSamples(_:[InBodyRecord]) async throws` for batch backfill.
+- Added single-sample dedup overload `saveWeight(_ kg:Double, date:Date, recordID:UUID)`; kept legacy `saveWeight(_:date:)` for back-compat.
+- All writes now `HKMetadataKeyWasUserEntered = false` (was `true` — wrong, OCR is not manual entry).
+- Dedup path: **query-first by SyncIdentifier + save-with-SyncIdentifier double protection** — query gives accurate `skippedDuplicate` count for the UI, save covers query→save races via HK's replace-by-version semantics (`HKMetadataKeySyncIdentifier = record.id.uuidString` + `HKMetadataKeySyncVersion = 1`).
+- Refactored all 3 legacy `try? saveWeight(weight, date:)` call sites (EditRecordView L118, ScanViewModel L189/L324) to pass `recordID: record.id`. Extract id/weight/date as Sendable primitives BEFORE `Task.detached` to avoid sending SwiftData `@Model` across actors.
+- `writeWeightSamples` reads `record.weight/scanDate/id` synchronously into local `Candidate` structs before the first `await` (Swift 6 isolation).
+- Pre-flight auth: `.notDetermined` triggers a single prompt; `.sharingDenied` after prompt → throws `HealthKitError.notAuthorized`. Per-sample errors aggregate into `result.failed` (never thrown).
+- Batch save atomic via `store.save([HKObject])`; on failure falls back to per-sample save to locate which records failed.
+- `make build` ✅.

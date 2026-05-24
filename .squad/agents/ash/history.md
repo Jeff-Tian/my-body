@@ -11,7 +11,7 @@
 
 ### 2026-05-24: InBody 230 OCR — three diagnostic patterns (Patterns A/B/C)
 
-Captured during the InBody 230 misread fix session (requested by Jeff Tian). Single diagnostic-first session that fixed all 4 remaining field misreads (weight, sm, bfm, tbw, lbm now all pass `OCRServiceInBody230Tests`).
+Captured during the InBody 230 misread fix session. Single diagnostic-first session that fixed all 4 remaining field misreads (weight, sm, bfm, tbw, lbm now all pass `OCRServiceInBody230Tests`).
 
 - **Pattern A — Vision splits decimals with a literal space.** Vision sometimes returns `"68. 1kg"` / `"56. 1 kg"` instead of `"68.1kg"`. The numeric regex inside `primaryNumber` would then capture only `68` and drop `.1`. **Fix:** rejoin `(\d)\.\s+(\d)` → `$1.$2` at the very top of `primaryNumber`, BEFORE key removal / unit stripping. Always normalize text first, then parse numbers.
 
@@ -24,74 +24,66 @@ Captured during the InBody 230 misread fix session (requested by Jeff Tian). Sin
 ### 2026-05-24: Tooling traps to remember
 
 - **xcbeautify 3.2.1 swallows test stdout** and reports crashes as `Executed 0 tests`. Bypass: pipe xcodebuild raw output through `grep`/`tail` directly, no `xcbeautify`. Or read `xcresulttool` from the `.xcresult` bundle.
-- **`String(format: "%s", swiftString)` CRASHES on non-ASCII text.** Vision returns UTF-8 Chinese strings. Always use `%@` for Swift String formatting. Bit me once in the dump test; never again.
-- **Swift `Double.truncatingRemainder(dividingBy: 1)` returns 0 for `12.0`** — so the "has decimal" bonus in scoring fires `(text.contains(".") && value % 1 != 0)`, but `12.0 % 1 == 0`. The bonus is correct conceptually (rewards genuine fractions) but means whole-number-with-trailing-zero values get no decimal bonus. Not a bug — just remember when scoring tied candidates.
+- **`String(format: "%s", swiftString)` CRASHES on non-ASCII text.** Vision returns UTF-8 Chinese strings. Always use `%@` for Swift String formatting.
+- **Swift `Double.truncatingRemainder(dividingBy: 1)` returns 0 for `12.0`** — so the "has decimal" bonus in scoring fires `(text.contains(".") && value % 1 != 0)`, but `12.0 % 1 == 0`. Not a bug — just remember when scoring tied candidates.
 
 ## Codebase (discovered 2026-05-15)
 
 - iOS 17+ Xcode project at root: `MyBody.xcodeproj` (generated via xcodegen — `project.yml`).
 - Source: `MyBody/` (MyBodyApp.swift, Models, Services, ViewModels, Views, Utilities).
-- Persistence: **SwiftData** (currently offline-only per README — "完全离线"). CloudKit/iCloud sync is a planned future capability, not yet implemented.
-- Already implemented: OCR pipeline (`MyBody/Services/OCRService.swift`), HealthKit integration (`MyBody/Services/HealthKitService.swift`), photo scanning (`PhotoScanService.swift`), OCR learning corrections (`OCRCorrection.swift` + `OCRCorrectionStore.swift`).
+- Persistence: **SwiftData** (currently offline-only per README — "完全离线"). CloudKit/iCloud sync is planned, not yet implemented.
+- Already implemented: OCR pipeline (`MyBody/Services/OCRService.swift`), HealthKit (`HealthKitService.swift`), photo scanning (`PhotoScanService.swift`), OCR learning corrections (`OCRCorrection.swift` + `OCRCorrectionStore.swift`).
 - Build: `make run` (simulator), `make run_device`, `make gen` (xcodegen), `make screenshots` (fastlane), `make release`.
-- Fastlane for App Store screenshots + release automation.
-- Localization: `MyBody/Localizable.xcstrings` (zh-Hans primary per README).
+- Localization: `MyBody/Localizable.xcstrings` (zh-Hans primary).
 - Roadmaps: `docs/ocr-learning-roadmap.md`, `docs/i18n-roadmap.md`, `docs/release.md`.
 
 - 2026-05-24: New single-photo import path landed (`ScanViewModel.startSingleImport(itemIdentifier:fallbackImageData:)` + `parseSingleDataImage`). PHAsset fast path reuses existing OCR pipeline (dedup intact); Data fallback path bypasses PHAsset (assetIdentifier nil) — relevant for any OCR/learning-correction work that assumes a non-nil asset id.
 
-- 2026-05-24: **InBody 230 横向柱状图轴刻度被误读为字段值(诊断)**。`OCRService.findValue` (MyBody/Services/OCRService.swift:268-367) 用 `rowFiltered.first(where: expected.contains)` 在 label 右侧同行第一个落在期望区间的数字胜出。InBody 230 每行布局是 `[label] [axis ticks 40 55 70 85 ...] [实测值 68.1 kg] [正常范围 X.X~Y.Y]`,轴刻度整数全部落在宽松的 `expected` 区间内(weight 20...250 / skeletalMuscle 5...60 / bodyFatMass 1...100),所以 **第一个轴刻度就胜出**,实测值永远拿不到。佐证:Jeff 看到的 55 / 60 / 40 全是整数;实测值 68.1 / 31.7 / 12.0 全是小数。
-  - 修复路径(诊断 written to `.squad/decisions/inbox/ash-inbody-ocr-axis-scale-misread.md`):
-    1. **方案 A**:`findValue` 行内候选改成评分(含单位 +大、小数 +中、box 高度 +中、最右侧 +小、等距整数群 -大),取最高分。
-    2. **方案 B**:扫描行内被 `isPureRange` 过滤的"正常范围"box(如 `53.4~72.3`),按 `cy` 配对到 label,把字段 expected 临时收紧到 `low×0.5 ... up×1.5`,把远端轴刻度(115/130/145)直接砍掉。
-    3. 加 Parker 回归 fixture:用 `IMG_2245.HEIC` 的 OCR `[TextBox]` dump 锁住 `weight=68.1 / skeletalMuscle=31.7 / bodyFatMass=12.0`。
-  - 经验教训:**`expected` 区间太宽 + first-match-wins 是 OCR 字段解析的常见反模式**。宽区间为机型差异留余地是对的,但选择器必须从"区间过滤 + first" 升级为"区间过滤 + 候选评分"。下次设计任何 spatial-OCR 字段解析时直接上评分函数,别再用 first。
-  - 受影响字段范围:所有带横向 bar chart 的主指标(weight / skeletalMuscle / bodyFatMass / 可能还有 totalBodyWater / bodyFatPercent / leanBodyMass)。BMI / WHR / BMR / 内脏脂肪等级等纯文本字段不受影响。
+### 2026-05-24: InBody 230 横向柱状图轴刻度被误读为字段值 — diagnostic
+`OCRService.findValue` used `rowFiltered.first(where: expected.contains)` — InBody 230 每行布局 `[label] [axis ticks 40 55 70 85 ...] [实测值 68.1 kg] [正常范围 X.X~Y.Y]`，轴刻度整数全落在宽松的 `expected` 区间内，**第一个轴刻度就胜出**。Lesson: **宽 `expected` 区间 + first-match-wins 是 OCR 字段解析的反模式**。区间过滤 + first → 区间过滤 + 候选评分。Full Plan A/B implementation details archived to `.squad/agents/ash/history-archive.md` (2026-05-24).
 
-- 2026-05-24: **InBody OCR axis-scale fix landed (Plan A + B)** in `OCRService.swift`. Replaced `rowFiltered.first(where: expected.contains)` with a two-stage pipeline:
-  1. **Plan B (range narrowing)**: scan same-row `isPureRange` boxes, parse first one via new `parsePrintedRange` → `(low, high)`, narrow field's expected to `[low×0.5, high×1.5]` ∩ original. Kills far axis ticks pre-scoring.
-  2. **Plan A (scoring)**: new `pickHighestScoring(pool, allRowCandidates)`. Weights: +4 unit (`kg|%|kcal`), +2 decimal (text contains `.` AND non-integer), +2 Q3 box height, +1 rightmost cx, **-5 equidistant integer group** (3+ ints, gap-spread < 0.4 → axis ticks). Tie-break: rightmost. Negative winner → bypass to legacy fallback.
-  - **Design call (recorded in `.squad/decisions/inbox/ash-ocr-scoring-impl.md`)**: kept scoring inline in `OCRService` rather than extracting an `OCRScorer` service — only one consumer, surgical change. If Ripley wants it moved later, the function shape is already pure-functional (no instance state).
-  - **Q3 height fallback**: `q3Height = 0` if degenerate → skip the +2 bonus instead of div-by-zero.
-  - **Equidistant detection**: requires `meanGap > 0.001` to guard against all-zero-cx degraded inputs.
-  - Build: `make build` (iphonesimulator) → Succeeded; only pre-existing `usesCPUOnly` warning.
-  - Fields with bar charts now expected-correct: weight, skeletalMuscle, bodyFatMass, totalBodyWater, leanBodyMass, bodyFatPercent. BMI/WHR/BMR/inbodyScore/visceralFatLevel unaffected (no `isPureRange` box on those rows → Plan B no-ops, scoring still right because those fields have no axis ticks).
-  - **Lesson reinforced**: scoring with explicit penalties for distractors (axis-tick -5) is more robust than narrowing the legitimate signal. Don't tighten `expected` permanently — narrow per-row via printed evidence.
-  - Pending: Parker's `IMG_2245.HEIC` box-dump fixture for regression lock-in (decisions.md target: weight=68.1 / skeletalMuscle=31.7 / bodyFatMass=12.0).
-
-**Future enhancement noted:** If we add `wasManuallyEdited: Bool` per-field flags later, this function should preserve manually-edited fields by default.
+### 2026-05-24: InBody OCR axis-scale fix landed — Plan A + B shipped (summary)
+Two-stage pipeline replaces `first-match-wins` in `OCRService.findValue`: **Plan B** narrows expected via same-row `isPureRange` box (× 0.5/1.5 buffer); **Plan A** scores remaining candidates (+4 unit, +2 decimal, +2 Q3 height, +1 rightmost, **-5 equidistant integer group**). Fields with bar charts now expected-correct. `make build` ✅. **Full design notes + edge cases archived in `history-archive.md`.**
 
 ### 2026-05-24: Pattern D + E + Fix 3 + Fix 4 + Pattern F + reparseExistingReport — archived
-Full session notes moved to `.squad/agents/ash/history-archive.md` (also captured in `.squad/decisions.md`). Headline takeaways:
-- Pattern D/E/Fix3/Fix4 surgical OCRService fixes recovered 3/5 IMG_2245 assertions; weight + bodyFatMass blocked by Vision (truth values absent from OCR output).
-- Pattern F: "运动处方" footer is the **trusted-override** source for weight when the bar-chart row emits plausible-but-wrong values (`238.0`, `w00.1kg`). `nil`-gated fallback isn't enough; use trusted override when an authoritative alternative source exists in the document.
-- `ScanViewModel.reparseExistingReport` static @MainActor method added — UI escape hatch for re-OCRing existing records; bypasses dedup, overwrites numeric fields in place. Lambert wired DetailView toolbar button.
+Full session notes in `.squad/agents/ash/history-archive.md`. Headline:
+- Pattern D/E/Fix3/Fix4 surgical fixes recovered 3/5 IMG_2245 assertions; weight + bodyFatMass blocked by Vision.
+- Pattern F: "运动处方" footer is **trusted-override** for weight when bar-chart row emits plausible-but-wrong values (`238.0`, `w00.1kg`). Use trusted override when an authoritative alternative source exists in the document.
+- `ScanViewModel.reparseExistingReport` static @MainActor method — UI escape hatch for re-OCRing existing records; bypasses dedup, overwrites numeric fields in place. Lambert wired DetailView toolbar button.
 
-### 2026-05-24 — HealthKit batch-write survey (Phase 1)
-- Existing `HealthKitService` writes one bodyMass sample per call via `saveWeight(_:date:)`; no dedupe metadata (no `HKMetadataKeySyncIdentifier`), no batch API, callers (ScanVM × 2, EditRecordView) all use `try?`.
-- Entitlements + Info.plist already correct: HealthKit cap on, `NSHealthUpdateUsageDescription` and `NSHealthShareUsageDescription` cover batch weight writes. No plist changes needed.
-- Data model is `InBodyRecord` (not `Report`); weight field = `weight: Double?` (kg), date = `scanDate: Date`, identity = `id: UUID` — use UUID as `HKMetadataKeySyncIdentifier` for idempotent re-writes.
-- Phase-2 API drafted: `writeWeightSamples(_ records: [InBodyRecord]) async throws -> HealthKitWriteResult` returning `written / skippedDuplicate / skippedInvalid / failed`. Pre-flight checks throw; per-sample errors collected. Survey saved to `.squad/decisions/inbox/ash-healthkit-write-survey.md`.
-- Flagged for Ripley: `HKMetadataKeyWasUserEntered=true` for OCR-derived samples is questionable; whether existing single-record callers should migrate to the batch API to share dedupe.
-
-## 2026-05-24 — Team note: Trends Weight → Health Phase 1
-Cross-agent Phase 1 planning landed in `.squad/decisions.md` (4 entries dated 2026-05-24). Before any Phase 2 implementation:
-- Read Ripley's architecture proposal (entry point, scope, dedup strategy, auth flow).
-- Read Ash's HealthKitService survey + proposed `writeWeightSamples(_:)` API + 2 open metadata questions.
-- Read Lambert's UI options (Toolbar item A chosen) + 7 i18n keys to add.
-- Read Parker's test plan + `HealthKitWriting` protocol seam + `MyBodyTests` target blocker.
-Two open arbitrations (dedup mechanism, `HKMetadataKeyWasUserEntered`) must be resolved by Ripley before Ash freezes the API.
-
-## 2026-05-24 — Weight→Health Phase 2 implementation
-- Added `HealthKitWriteResult` (written / skippedInvalid / skippedDuplicate / failed:[(UUID,Error)]) + `writeWeightSamples(_:[InBodyRecord]) async throws -> HealthKitWriteResult` for batch backfill.
-- Added single-sample dedup overload `saveWeight(_ kg:Double, date:Date, recordID:UUID)`; kept legacy `saveWeight(_:date:)` for back-compat (no dedup).
-- All writes now carry `HKMetadataKeyWasUserEntered = false` (was previously `true` — wrong, OCR is not manual entry).
-- Dedup path: **query-first by SyncIdentifier + save-with-SyncIdentifier double protection** — query gives accurate `skippedDuplicate` count for the UI dialog, save-with-SyncIdentifier (`HKMetadataKeySyncIdentifier = record.id.uuidString` + `HKMetadataKeySyncVersion = 1`) covers query→save races via HK's replace-by-version semantics.
-- Refactored all 3 legacy `try? saveWeight(weight, date:)` call sites (EditRecordView L118, ScanViewModel L189/L324) to pass `recordID: record.id`. Extract id/weight/date as Sendable primitives BEFORE `Task.detached` to avoid sending SwiftData `@Model` across actors.
-- `writeWeightSamples` reads `record.weight/scanDate/id` synchronously into local `Candidate` structs before the first `await` to stay safe under Swift 6 isolation.
-- Pre-flight auth: `.notDetermined` triggers a single prompt; on `.sharingDenied` after prompt → throws `HealthKitError.notAuthorized`. Per-sample errors aggregate into `result.failed` (never thrown).
-- Batch save is atomic via `store.save([HKObject])`; on failure falls back to per-sample save to locate which records failed.
-- `make build` ✅.
+### 2026-05-24: HealthKit batch-write — Phases 1 & 2 (summary; full notes archived)
+Phase 1 survey + Phase 1 cross-agent team note + Phase 2 implementation details all moved to `history-archive.md`. Key surface delivered:
+- `HealthKitWriteResult` (written / skippedInvalid / skippedDuplicate / failed:[(UUID,Error)])
+- `writeWeightSamples(_:[InBodyRecord]) async throws -> HealthKitWriteResult` (batch backfill)
+- Single-sample dedup overload `saveWeight(_ kg:Double, date:Date, recordID:UUID)`; kept legacy non-dedup overload for back-compat
+- All writes now `HKMetadataKeyWasUserEntered = false` (corrected — OCR is not manual entry)
+- Dedup = **query-first + save-with-SyncIdentifier** double protection (UUID as `HKMetadataKeySyncIdentifier`, `HKMetadataKeySyncVersion = 1`)
+- All 3 legacy `try? saveWeight(...)` call sites refactored to pass `recordID:`. Extract id/weight/date as Sendable primitives BEFORE `Task.detached` (SwiftData `@Model` cross-actor restriction).
 
 ## 2026-05-24 — Phase 2 shipped (team note)
 Trends「写入健康」Phase 2 complete. My deliverable: `writeWeightSamples` + `HealthKitWriteResult` + dedup-enabled `saveWeight(_:date:recordID:)`. Lambert built UI on top; Parker shipped 10 active tests. **Open:** Ripley arbitration on `HealthKitWriting` protocol seam — extracting it unlocks Parker's 6 skipped unit tests.
+
+## 2026-05-24 — Batch re-parse for skipped duplicates (ScanViewModel)
+
+Extended `ScanViewModel` so the batch-import flow can offer end-of-batch "重新识别" for records that were silently skipped as duplicates.
+
+**Public surface added (VM):**
+- `var duplicateAssetIds: [String] = []` — populated in the dedup branch of `parseNextPhoto()`, in lock-step with `duplicateCount`.
+- `var reparseIndex: Int = 0`, `var reparseTotal: Int = 0` — dedicated progress fields so batch-import progress (`currentParseIndex` / `selectedPhotos.count`) is not mutated during the reparse sweep.
+- `@MainActor func reparseDuplicateRecords() async -> (succeeded: Int, failed: Int, errors: [(assetId: String, error: Error)])` — loops over `duplicateAssetIds`, fetches each `InBodyRecord` by `photoAssetIdentifier` predicate, delegates to existing `Self.reparseExistingReport(...)`, writes Chinese progress messages into `parseStageMessage`, best-effort (failures recorded, loop continues). Does NOT clear `duplicateAssetIds` so UI can show summary.
+
+**Resets:** added the three new fields to `reset()`.
+**Dedup branch:** only one new line — `duplicateAssetIds.append(assetId)`.
+**Reparse method:** ~50 lines added at file tail, reusing `OCRCorrection` snapshot pipeline via the static `reparseExistingReport`.
+
+**Contract handed to Lambert:**
+```swift
+let result = await scanVM.reparseDuplicateRecords()
+// result.succeeded, result.failed, result.errors
+// Progress while running: scanVM.reparseIndex / scanVM.reparseTotal + scanVM.parseStageMessage
+```
+
+**Test status:** `make test-unit` — 18 tests, 0 failures, 6 expected skips. Bundle fixture 5/5 still green (OCRServiceInBody230 + Dump suites pass).
+
+**Files touched:**
+- `MyBody/ViewModels/ScanViewModel.swift` (~60 lines added, 0 removed; no behavior change to existing dedup/initial scan path)

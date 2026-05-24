@@ -468,3 +468,14 @@ protocol HealthKitWriting {
 
 **Test execution result:** `make test-unit` → build error 65, did NOT reach the test phase. Neither pass nor fail counts available for my new file until Lambert's 2 errors are resolved (then I should re-run and confirm 9 pass + 6 skipped).
 
+
+### 2026-05-24: Batch re-parse path for end-of-batch "重新识别 duplicates"
+**By:** Ash (Core/Vision/OCR)
+**What:** Added `duplicateAssetIds: [String]`, `reparseIndex`/`reparseTotal: Int`, and `@MainActor func reparseDuplicateRecords() async -> (succeeded, failed, errors)` to `ScanViewModel`. Duplicate asset IDs are now collected (not just counted) in the dedup branch of `parseNextPhoto()`. The new sweep method iterates duplicates, fetches each `InBodyRecord` by `photoAssetIdentifier` predicate, and delegates per-record to existing static `reparseExistingReport(...)` — best-effort, failures collected into errors array, loop continues. Progress fields are deliberately separate from batch-scan progress to avoid UI state collisions. `duplicateAssetIds` is NOT cleared at end so UI can render "X / Y 已更新" summary.
+**Why:** Earlier dedup was destructive (count-only) — there was no way to surface "these N photos already had records" to the user or to act on them. New flow keeps initial-scan dedup behavior intact while enabling a second, explicitly user-confirmed re-OCR pass.
+**Contract for Lambert (UI):** call `await scanVM.reparseDuplicateRecords()`; show progress via `reparseIndex`/`reparseTotal` + `parseStageMessage` (already in 中文); render result tuple as summary. Tests stay green (`make test-unit` 18/0/6).
+
+### 2026-05-24: 批量导入完成后弹窗询问是否对去重报告重新识别
+**By:** Lambert (UI)
+**What:** `PhotoScanView` 在 `batchFinished` 时若 `duplicateAssetIds` 非空，弹 alert「重新识别已有报告？」，按钮「重新识别」(default) / 「跳过」(cancel)。「跳过」直接关闭 sheet；「重新识别」展示 dim+material overlay（文案绑 `reparseIndex/reparseTotal`），完成后顶部 capsule banner 显示「已更新 X 条」(`appGreen`) 或「已更新 X 条，Y 条失败」(`appOrange`)，2.5s 后 `dismiss()`。
+**Why:** 去重保证幂等的同时，老照片不能享受 OCR 引擎升级；显式询问而非自动跑，避免覆盖用户已手编辑数据时的预期错位。复用 DetailView 单条 reparse 的视觉语言保持一致。

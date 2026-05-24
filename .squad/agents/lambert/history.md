@@ -83,3 +83,12 @@ Two open arbitrations (dedup mechanism, `HKMetadataKeyWasUserEntered`) must be r
 
 ## 2026-05-24 — Phase 2 shipped (team note)
 Trends「写入健康」Phase 2 complete. My deliverable: `WeightHealthWriteController` + overlay modifier + TrendsView toolbar + 19 i18n keys. Post-build fix: corrected `HealthKitWriteResult` field order + `Phase: Equatable`. Pattern is reusable for future HK writes (body fat, water, etc.). Ash shipped the service; Parker shipped tests.
+
+### 2026-05-24 — PhotoScanView 批量「重新识别」prompt
+- 在 `MyBody/Views/Scan/PhotoScanView.swift` 给批量导入收尾接入「是否对去重跳过的报告重新识别」alert。
+- 触发条件：`viewModel.batchFinished == true` 且 `viewModel.duplicateAssetIds.count > 0`；否则维持原行为直接 `dismiss()`。
+- 复用 DetailView reparse 的视觉栈：`Color.black.opacity(0.35)` 全屏 dim + `.ultraThinMaterial` 圆角卡片 + `ProgressView().tint(.white)`；进度文案优先用 `viewModel.reparseIndex / reparseTotal`，未启动时退化为「重新识别中…」。
+- 结果 banner 沿用 capsule 风格：成功 `appGreen` + checkmark；含失败 `appOrange` + warning triangle，2.5s 后自动 `dismiss()`。
+- `cancel` 按钮在 `isReparsing` 期间禁用，避免用户中途丢上下文。
+- Ash 的 ViewModel API 已落地（`duplicateAssetIds: [String]`、`reparseIndex/reparseTotal`、`reparseDuplicateRecords() -> (succeeded, failed, errors)`），UI 直接绑。
+- 教训：嵌套于 `View` 内的 `private struct ReparseSummary` 在 file-private 的 `BatchReparseBanner` 里不可访问，必须显式 `fileprivate` —— Swift 嵌套类型默认沿用包含类型的可见性。
