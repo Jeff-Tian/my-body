@@ -355,6 +355,37 @@ test-unit: gen
 		-only-testing:MyBodyTests \
 		CODE_SIGNING_ALLOWED=NO $(LOG_PIPE)
 
+## test-ocr-dump: 只跑 InBody 230 OCR 诊断 dump 测试(纯打印,不断言)
+##   用法:
+##     make test-ocr-dump                                  # 跑测试,只显示关键日志
+##     make test-ocr-dump VERBOSE=1                        # 输出完整 xcodebuild 日志
+##   日志位置:派生数据 xcresult 里也能找到,但终端已直接打印 DUMP / LABEL / cand / parser picked
+.PHONY: test-ocr-dump
+test-ocr-dump: gen
+	@set -euo pipefail; \
+	PICK=$$(/usr/bin/python3 -c "$$PICK_SIM_PY"); \
+	SIM_UDID=$$(echo "$$PICK" | awk -F'\t' '{print $$1}'); \
+	SIM_NAME=$$(echo "$$PICK" | awk -F'\t' '{print $$2}'); \
+	SIM_VER=$$(echo "$$PICK" | awk -F'\t' '{print $$3}'); \
+	if [ -z "$$SIM_UDID" ]; then echo "[test-ocr-dump] 找不到可用 iPhone 模拟器" >&2; exit 1; fi; \
+	echo "[test-ocr-dump] 使用模拟器: $$SIM_NAME (iOS $$SIM_VER, $$SIM_UDID)"; \
+	echo "[test-ocr-dump] 只跑 OCRServiceInBody230DumpTests (纯诊断,不影响通过率)"; \
+	if [ "$${VERBOSE:-0}" = "1" ]; then \
+		xcodebuild test -scheme $(SCHEME) -project $(PROJECT) \
+			-destination "platform=iOS Simulator,id=$$SIM_UDID" \
+			-derivedDataPath $(DERIVED_DATA) \
+			-only-testing:MyBodyTests/OCRServiceInBody230DumpTests \
+			CODE_SIGNING_ALLOWED=NO $(LOG_PIPE); \
+	else \
+		xcodebuild test -scheme $(SCHEME) -project $(PROJECT) \
+			-destination "platform=iOS Simulator,id=$$SIM_UDID" \
+			-derivedDataPath $(DERIVED_DATA) \
+			-only-testing:MyBodyTests/OCRServiceInBody230DumpTests \
+			CODE_SIGNING_ALLOWED=NO 2>&1 \
+			| grep -E "(InBody230 RAW OCR DUMP|^text \||^---- field:|LABEL |cand |parser picked|no label matched|no same-row|====|Test Suite.*(passed|failed)|error:|XCTSkip)" \
+			|| true; \
+	fi
+
 ## clean: 清理构建产物
 .PHONY: clean
 clean:

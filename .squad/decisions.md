@@ -216,3 +216,48 @@ Tie-break: highest score, then rightmost cx.
 - Ripley: confirm the scoring weights live in `OCRService` (not a
   separate `OCRScorer` service) — current shape keeps it surgical and
   inside the only consumer.
+### 2026-05-24: Xcode 26.5 blocks `xcodebuild test` until iOS 26.5 runtime is installed
+**By:** Ripley
+**What:** Patched `test`/`test-unit` Makefile targets to JSON-pick newest installed iOS runtime + pass UDID destination (replaces fragile awk parsing). Verified picker on Jeff's machine: iPhone 17 Pro / iOS 26.4.1 / `A9F9CCA5-AE42-4400-AE52-16B081538192`.
+**Blocker discovered:** `xcodebuild test` enforces strict SDK↔runtime pairing. Xcode 26.5's iphonesimulator SDK (build `23F73`) refuses to run on the iOS 26.4.1 runtime (build `23E254a`). Error: `No simulator runtime version from ["21F79","22C150","22F77","23B86","23C54","23E244","23E254a"] available to use with iphonesimulator SDK version 23F73`. `make run` is unaffected because the build action is lenient.
+**Why:** OCRServiceInBody230Tests could not be evaluated until one of these is true:
+1. Install iOS 26.5 simulator runtime (~6GB) via Xcode → Settings → Components.
+2. Install a side-by-side older Xcode (e.g., 16.x) and point `DEVELOPER_DIR` to it for the test target only.
+3. (Last resort) Run the test as an XCTest plugin against macOS — not viable for Vision-based HEIC OCR fixtures.
+**Status:** Makefile patch staged (not committed). Test execution deferred until runtime/SDK gap is resolved.
+
+### 2026-05-24T07:42:49Z: InBody 230 OCR — Patterns A/B/C fix landed
+
+**By:** Ash (Core Engineer), requested by Jeff Tian
+**Scope:** `MyBody/Services/OCRService.swift` only
+
+**What changed (5 surgical edits, all dump-evidence driven, zero scoring-weight tweaks):**
+
+1. **`primaryNumber` decimal-space rejoin** — added `(\d)\.\s+(\d)` → `$1.$2` regex at top of function BEFORE key/unit stripping. Fixes weight `"68. 1kg"` → `68.1` and any future Vision split-decimal output.
+2. **`findValue` signature** — added `competitorKeys: [String] = []` parameter.
+3. **Call site** — passes `specs.flatMap{$0.keys}` minus current spec's keys as competitorKeys.
+4. **`competitorRight` computation** — inside per-label loop, finds nearest right-of-label competitor FieldSpec label within rowTol. Default `1.0` when none.
+5. **Column cap on both candidate chains** — `rowCandidates` and `rowNumbersIncludingRange` both gain `.filter { $0.left < competitorRight }`.
+6. **`rowRange` sort-by-cy-distance** — replaced `.first` with `.sorted { abs($0.cy - label.cy) < abs($1.cy - label.cy) }.first` so when two adjacent fields' reference ranges both fall within rowTol, the one geometrically closer to the label wins.
+
+**Why this approach (not scoring weights):**
+
+The coordinator's diagnostic-first directive applied here. The 216-box raw OCR dump (`OCRServiceInBody230DumpTests`, env-guarded `OCR_SKIP_DUMP`) revealed three distinct root causes:
+
+- Pattern A: Vision text-shape bug (decimal split by literal space)
+- Pattern B: layout collision (two FieldSpec labels share row 0.657)
+- Pattern C: heuristic ambiguity (two valid pure-range boxes in same rowTol band, `.first` picks wrong one)
+
+None of these would have been solved by reweighting the scoring function. Each got a TARGETED edit at the layer responsible for the failure (text normalization / column geometry / range selection ordering).
+
+**Verification:**
+
+`xcodebuild test -only-testing:MyBodyTests/OCRServiceInBody230Tests` — PASS (4.7s). All 5 fields read correctly: weight=68.1, sm=31.7, bfm=12.0, tbw=41.2, lbm=56.1 (±0.05).
+
+**Decisions for the team to respect going forward:**
+
+- **The OCR dump test is the diagnostic entry point.** Future OCR misreads → run `OCR_SKIP_DUMP=0 xcodebuild test -only-testing:MyBodyTests/OCRServiceInBody230DumpTests` (or analog for the failing report) FIRST. Eyeball the boxes. Then edit.
+- **Do not "fix" OCR by adjusting scoring weights** unless the dump shows you've exhausted geometric/textual root causes. Scoring weights are last resort.
+- **`competitorRight` is now a load-bearing invariant in findValue.** Any new FieldSpec must list ALL of its label aliases in `keys` so the competitor lookup is symmetric — otherwise siblings can bleed in either direction.
+- **`rowRange` picks the cy-closest pure-range box, not the first one in iteration order.** Don't revert to `.first` without re-running the InBody 230 regression.
+

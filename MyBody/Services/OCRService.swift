@@ -225,8 +225,12 @@ final class OCRService: Sendable {
         ]
 
         var values: [String: Double] = [:]
+        // All known field keys (used to detect competing labels on the same row, e.g.
+        // 身体水分含量 and 去脂体重 sit side-by-side in the InBody 230 layout).
+        let allOtherKeys: [String] = specs.flatMap { $0.keys }
         for spec in specs {
-            if let hit = findValue(for: spec.keys, in: boxes, expected: spec.expected) {
+            let competitorKeys = allOtherKeys.filter { k in !spec.keys.contains(k) }
+            if let hit = findValue(for: spec.keys, in: boxes, expected: spec.expected, competitorKeys: competitorKeys) {
                 // 先看用户是否已经为这段原始文本登记过纠正
                 if let corrected = corrections?(spec.name, hit.rawText) {
                     values[spec.name] = corrected
@@ -292,7 +296,8 @@ final class OCRService: Sendable {
     private func findValue(
         for keys: [String],
         in boxes: [TextBox],
-        expected: ClosedRange<Double>
+        expected: ClosedRange<Double>,
+        competitorKeys: [String] = []
     ) -> (value: Double, rawText: String)? {
         // 优先匹配更长、更独特的关键字
         let sortedKeys = keys.sorted { $0.count > $1.count }
@@ -318,13 +323,30 @@ final class OCRService: Sendable {
 
             let rowTol = max(label.box.height, 0.012) * 1.8
 
+            // ── 同行列界:若存在其他已知字段标签也落在本行右侧,把候选 cx 锁在它左边 ──
+            // 例:InBody 230 把 `身体水分含量` 和 `去脂体重` 放在同一行,前者的值是
+            // 41.2,后者的值是 56.1。如果不卡列,前者会取到后者的 56。
+            let competitorRight: CGFloat = {
+                guard !competitorKeys.isEmpty else { return 1.0 }
+                let nextLabelLeft = boxes
+                    .filter { $0.left > label.right + 0.005 }
+                    .filter { abs($0.cy - label.cy) < rowTol }
+                    .filter { b in competitorKeys.contains(where: { containsKey(b.text, key: $0) }) }
+                    .map { $0.left }
+                    .min()
+                return nextLabelLeft ?? 1.0
+            }()
+
             // ── Plan B:同行印刷范围 sanity check ────────────────────────────
             // 扫描同行被 `isPureRange` 过滤的 box,解析成 (low, high)。
             // 把字段 `expected` 临时收紧到 [low × 0.5, high × 1.5],
             // 这一步把柱状图远端轴刻度(115/130/145)直接砍掉。
+            // ⚠️ 多个 isPureRange box 可能同时落入 rowTol(相邻字段的参考范围互相渗透),
+            // 因此按 cy 距离 label 升序排序,取离 label 最近的那一条。
             let rowRange = boxes
                 .filter { abs($0.cy - label.cy) < rowTol }
                 .filter { isPureRange($0.text) }
+                .sorted { abs($0.cy - label.cy) < abs($1.cy - label.cy) }
                 .compactMap { parsePrintedRange($0.text) }
                 .first
             let narrowed: ClosedRange<Double> = {
@@ -337,6 +359,7 @@ final class OCRService: Sendable {
             // 同行右侧、非"纯范围"的所有数字候选(保留 TextBox 用于评分:高度、位置)
             let rowCandidates: [(value: Double, box: TextBox)] = boxes
                 .filter { $0.left > label.right - 0.005 }
+                .filter { $0.left < competitorRight }
                 .filter { abs($0.cy - label.cy) < rowTol }
                 .filter { !isPureRange($0.text) }
                 .compactMap { b in
@@ -368,6 +391,7 @@ final class OCRService: Sendable {
             // ── 兜底 2:允许"纯范围" box 中的主数字(BMI / WHR 等无范围字段) ──
             let rowNumbersIncludingRange: [(Double, CGFloat, String)] = boxes
                 .filter { $0.left > label.right - 0.005 }
+                .filter { $0.left < competitorRight }
                 .filter { abs($0.cy - label.cy) < rowTol }
                 .compactMap { b in
                     guard let n = primaryNumber(in: b.text, excludingKeys: keys) else { return nil }
@@ -541,6 +565,14 @@ final class OCRService: Sendable {
         if isPureRange(text) { return nil }
 
         var working = text
+        // Vision sometimes splits decimals with a literal space, e.g. "68. 1kg" or "56. 1 kg".
+        // Stitch any `<digit>. <digit>` (one or more spaces) back into `<digit>.<digit>` BEFORE
+        // anything else touches the string, so the number regex below captures the full value.
+        working = working.replacingOccurrences(
+            of: #"(\d)\.\s+(\d)"#,
+            with: "$1.$2",
+            options: .regularExpression
+        )
         for key in keys {
             working = working.replacingOccurrences(of: key, with: " ", options: .caseInsensitive)
         }
