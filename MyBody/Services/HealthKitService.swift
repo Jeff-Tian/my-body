@@ -1,6 +1,19 @@
 import Foundation
 import HealthKit
 
+/// Testable seam for the Trends / Edit / Scan call paths that touch Apple Health.
+///
+/// Only the surface those call sites need is exposed — internals (queries, sample
+/// construction, HKHealthStore) stay private on `HealthKitService`. Tests inject a
+/// fake conforming to this protocol; production code keeps using `HealthKitService.shared`.
+protocol HealthKitWriting {
+    var isAvailable: Bool { get }
+    var bodyMassWriteStatus: HKAuthorizationStatus { get }
+    func requestAuthorization() async throws
+    func writeWeightSamples(_ records: [InBodyRecord]) async throws -> HealthKitWriteResult
+    func saveWeight(_ kg: Double, date: Date, recordID: UUID) async throws
+}
+
 /// 把识别出的体重写入「健康」App。
 ///
 /// - 仅请求 `HKQuantityTypeIdentifier.bodyMass` 的写入/读取权限。
@@ -8,7 +21,7 @@ import HealthKit
 /// - 用户在「设置」里关闭同步开关时，调用方应自行不再调用 `saveWeight`。
 /// - 所有写入都附带 `HKMetadataKeySyncIdentifier`（key 为 `InBodyRecord.id.uuidString`），
 ///   重复调用同一条记录不会产生重复样本（同源内由 HealthKit 按 SyncVersion 替换）。
-final class HealthKitService {
+final class HealthKitService: HealthKitWriting {
     static let shared = HealthKitService()
 
     /// `HKHealthStore` 在不支持的设备（如 Mac Catalyst / iPad）上仍可创建，
@@ -123,18 +136,15 @@ final class HealthKitService {
         }
 
         var result = HealthKitWriteResult()
-        let now = Date()
 
         // 1) 先在调用者 actor 上把 SwiftData `@Model` 读成 Sendable 原语，
         //    避免后续 await 之后再触碰 model 导致跨 actor 隔离问题。
         struct Candidate { let id: UUID; let weight: Double; let date: Date }
-        var candidates: [Candidate] = []
-        for record in records {
-            guard let w = record.weight, w > 0, record.scanDate <= now else {
-                result.skippedInvalid += 1
-                continue
-            }
-            candidates.append(Candidate(id: record.id, weight: w, date: record.scanDate))
+        let parts = Self.partitionForWrite(records)
+        result.skippedInvalid = parts.skippedInvalid.count
+        let candidates: [Candidate] = parts.writable.compactMap { record in
+            guard let w = record.weight else { return nil }
+            return Candidate(id: record.id, weight: w, date: record.scanDate)
         }
 
         // 2) Pre-flight 授权：一次性 prompt，避免循环里多次询问。
@@ -241,6 +251,29 @@ final class HealthKitService {
             }
             store.execute(query)
         }
+    }
+
+    // MARK: - Pre-flight partition (shared with tests)
+
+    /// 把候选记录拆成「可写入」和「应跳过（无效）」两组。
+    /// 无效定义：`weight == nil` / `<= 0` / `scanDate > now`。
+    /// 提取为 `static` 以便测试 Fake (`FakeHealthKitWriter`) 重用同一份过滤逻辑，
+    /// 避免 production 行为与测试 mirror 漂移。
+    /// `now` 可注入以便测试控制「未来日期」判定边界，默认 `Date()`。
+    static func partitionForWrite(
+        _ records: [InBodyRecord],
+        now: Date = Date()
+    ) -> (writable: [InBodyRecord], skippedInvalid: [InBodyRecord]) {
+        var writable: [InBodyRecord] = []
+        var skipped: [InBodyRecord] = []
+        for r in records {
+            if let w = r.weight, w > 0, r.scanDate <= now {
+                writable.append(r)
+            } else {
+                skipped.append(r)
+            }
+        }
+        return (writable, skipped)
     }
 }
 
