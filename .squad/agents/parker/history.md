@@ -21,3 +21,6 @@
 - Roadmaps: `docs/ocr-learning-roadmap.md`, `docs/i18n-roadmap.md`, `docs/release.md`.
 
 - 2026-05-24: New single-photo import path landed via HomeView FAB Menu + `SinglePhotoImportView` + `ScanViewModel.startSingleImport`. Test surface to consider: PHAsset fast path (with identifier) vs Data fallback (assetIdentifier: nil, limited-access albums); new sheet UI on HomeView.
+
+### 2026-05-24: Heads-up — OCR axis-scale misread fixture incoming
+Ash diagnosed an `OCRService.findValue` first-match bug on InBody 230 `IMG_2245.HEIC` (parses weight as 55 instead of 68.1 kg). Once Jeff approves Plan A/B, you'll be asked to author a regression fixture: dump the `[TextBox]` JSON for that image and lock `weight=68.1 / skeletalMuscle=31.7 / bodyFatMass=12.0` as a snapshot test. See decisions.md entry "InBody 横向柱状图坐标轴刻度被误读为字段值".

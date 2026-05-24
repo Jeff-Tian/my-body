@@ -19,3 +19,6 @@
 - Fastlane for App Store screenshots + release automation.
 - Localization: `MyBody/Localizable.xcstrings` (zh-Hans primary per README).
 - Roadmaps: `docs/ocr-learning-roadmap.md`, `docs/i18n-roadmap.md`, `docs/release.md`.
+
+### 2026-05-24: Architecture decision pending — OCR parsing refactor
+Ash proposed Plan A (per-row candidate scoring inside `OCRService.findValue`) + Plan B (parse printed "正常范围" box to tighten per-field `expected`). Both are local to `OCRService`, no public API change. Review for architectural fit (esp. how this interacts with Phase 5 personalization in `docs/ocr-learning-roadmap.md`) before implementation lands. Details: decisions.md entry "InBody 横向柱状图坐标轴刻度被误读为字段值".
