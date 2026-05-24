@@ -39,6 +39,30 @@ targets:
       - path: MyBody
     dependencies:
       - sdk: HealthKit.framework
+    postCompileScripts:
+      - name: "Embed Git Commit Hash"
+        # 在编译后、签名前，把当前 git short hash 写进已生成的 Info.plist。
+        # 这样设置页就能显示 commit hash，便于判断真机 / TestFlight 上跑的是哪一次提交。
+        # 如果有未提交改动，hash 后会附加 "-dirty"。非 git 仓库或缺 git 时写 "unknown"。
+        script: |
+          set -e
+          if command -v git >/dev/null 2>&1 && git -C "$SRCROOT" rev-parse --git-dir >/dev/null 2>&1; then
+            GIT_HASH=$(git -C "$SRCROOT" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+            if ! git -C "$SRCROOT" diff --quiet HEAD 2>/dev/null; then
+              GIT_HASH="${GIT_HASH}-dirty"
+            fi
+          else
+            GIT_HASH="unknown"
+          fi
+          INFO_PLIST="${TARGET_BUILD_DIR}/${INFOPLIST_PATH}"
+          if [ -f "$INFO_PLIST" ]; then
+            /usr/libexec/PlistBuddy -c "Delete :GitCommitHash" "$INFO_PLIST" 2>/dev/null || true
+            /usr/libexec/PlistBuddy -c "Add :GitCommitHash string ${GIT_HASH}" "$INFO_PLIST"
+            echo "[Embed Git] GitCommitHash=${GIT_HASH} -> $INFO_PLIST"
+          else
+            echo "[Embed Git] WARN: Info.plist not found at $INFO_PLIST"
+          fi
+        basedOnDependencyAnalysis: false
     settings:
       base:
         INFOPLIST_FILE: MyBody/Info.plist

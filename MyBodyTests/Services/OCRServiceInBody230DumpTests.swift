@@ -102,6 +102,21 @@ final class OCRServiceInBody230DumpTests: XCTestCase {
     }
 
     private func loadFixtureImage() throws -> UIImage {
+        // Diagnostic override: when `OCR_DUMP_IMAGE_PATH` is set, load that
+        // file directly off the local filesystem. Used for one-off diagnosis
+        // against the original (PII-bearing) source photo without committing
+        // it. This branch MUST NOT be relied on by CI.
+        if let overridePath = ProcessInfo.processInfo.environment["OCR_DUMP_IMAGE_PATH"],
+           !overridePath.isEmpty {
+            let url = URL(fileURLWithPath: overridePath)
+            guard let data = try? Data(contentsOf: url),
+                  let image = UIImage(data: data) else {
+                throw XCTSkip("OCR_DUMP_IMAGE_PATH set but image could not be loaded: \(overridePath)")
+            }
+            print("⚙️  Using OCR_DUMP_IMAGE_PATH override: \(overridePath)")
+            return image
+        }
+
         let bundle = Bundle(for: type(of: self))
         for ext in Self.fixtureExtensionCandidates {
             if let url = bundle.url(forResource: Self.fixtureBaseName, withExtension: ext),

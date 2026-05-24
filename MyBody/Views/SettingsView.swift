@@ -16,6 +16,10 @@ struct SettingsView: View {
         Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "-"
     }
 
+    private var gitCommitHash: String {
+        Bundle.main.infoDictionary?["GitCommitHash"] as? String ?? "-"
+    }
+
     var body: some View {
         NavigationStack {
             Form {
@@ -58,6 +62,15 @@ struct SettingsView: View {
                         Text("\(appVersion) (\(buildNumber))")
                             .foregroundStyle(.secondary)
                     }
+                    HStack {
+                        Text("提交")
+                        Spacer()
+                        Text(gitCommitHash)
+                            .font(.system(.footnote, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
+                    .accessibilityIdentifier("aboutCommitHashRow")
                     Button {
                         showingPrivacy = true
                     } label: {

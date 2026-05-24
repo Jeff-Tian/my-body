@@ -243,6 +243,23 @@ final class OCRService: Sendable {
             }
         }
 
+        // Pattern F (Trusted Override) — 运动处方段落里 "基础体重：68.1 kg" 是普通印刷文本,
+        // 比柱状图行(常被 Vision 误读成 "w00.1kg" 或抓到坐标轴刻度如 "238")可靠得多。
+        // 当能从这段抽到值时,优先采信它,无论主路径是否给出了值。
+        // 注:若样张里没有这段(老报告/裁剪过的图),helper 返回 nil,主路径值原样保留。
+        if let trusted = extractWeightFromExercisePrescription(
+            boxes: boxes,
+            expected: 20...250
+        ) {
+            if let corrected = corrections?("weight", trusted.rawText) {
+                values["weight"] = corrected
+            } else {
+                values["weight"] = trusted.value
+            }
+            report.rawTexts["weight"] = trusted.rawText
+            report.failedFields.remove("weight")
+        }
+
         report.weight           = values["weight"]
         report.skeletalMuscle   = values["skeletalMuscle"]
         report.bodyFatMass      = values["bodyFatMass"]
@@ -273,6 +290,85 @@ final class OCRService: Sendable {
         report.segFatRightLeg = segFat.rightLeg
 
         return report
+    }
+
+    /// 从 InBody 230 "运动处方" 段落抽取"基础体重"印刷数值。
+    ///
+    /// Vision 通常把这一行拆成两个 box,例如:
+    ///   `每项运动所消耗的能量（基础体重：` (左侧 cx≈0.26 cy≈0.31)
+    ///   `68.1 kg /持续时间：30分钟/单位：大卡）` (右侧 cx≈0.47 cy≈0.30)
+    /// 也可能(在其他样张里)拼成单个 box `... 基础体重：68.1 kg ...`。
+    ///
+    /// 算法:
+    /// 1. 先在所有 box 上正则匹配 `基础体重[：:]\s*(\d+(?:\.\d+)?)\s*kg`,
+    ///    捕获到合法数字就返回。
+    /// 2. 若 1 失败,定位包含 `基础体重` 的 box(label box),
+    ///    在同行右侧(rowTol = max(h,0.012)*1.8)找 box,
+    ///    用 `(\d+(?:\.\d+)?)\s*kg` 抽取数字。
+    ///
+    /// 容错:文本里如出现 `68. 1 kg`(Vision 偶发的"小数点后空格"),先做合并再匹配。
+    private func extractWeightFromExercisePrescription(
+        boxes: [TextBox],
+        expected: ClosedRange<Double>
+    ) -> (value: Double, rawText: String)? {
+        // 把 "68. 1 kg" / "68 . 1kg" 规范化为 "68.1 kg",和 primaryNumber 保持一致。
+        func normalize(_ s: String) -> String {
+            s.replacingOccurrences(
+                of: #"(\d)\s*\.\s+(\d)"#,
+                with: "$1.$2",
+                options: .regularExpression
+            )
+        }
+        func parseKgNumber(_ text: String) -> Double? {
+            let normalized = normalize(text)
+            guard let re = try? NSRegularExpression(
+                pattern: #"(\d+(?:\.\d+)?)\s*kg"#,
+                options: [.caseInsensitive]
+            ) else { return nil }
+            let range = NSRange(normalized.startIndex..., in: normalized)
+            guard let m = re.firstMatch(in: normalized, options: [], range: range),
+                  m.numberOfRanges >= 2,
+                  let r = Range(m.range(at: 1), in: normalized),
+                  let v = Double(normalized[r]),
+                  expected.contains(v) else { return nil }
+            return v
+        }
+
+        // 1) 单 box 匹配:`基础体重：68.1 kg`
+        let single = try? NSRegularExpression(
+            pattern: #"基础体重[：:]\s*(\d+(?:\.\d+)?)\s*kg"#,
+            options: [.caseInsensitive]
+        )
+        if let re = single {
+            for b in boxes {
+                let text = normalize(b.text)
+                let r = NSRange(text.startIndex..., in: text)
+                if let m = re.firstMatch(in: text, options: [], range: r),
+                   m.numberOfRanges >= 2,
+                   let valRange = Range(m.range(at: 1), in: text),
+                   let v = Double(text[valRange]),
+                   expected.contains(v) {
+                    return (v, b.text)
+                }
+            }
+        }
+
+        // 2) 跨 box:label "基础体重" 与数字 box 拆开。
+        let labelBoxes = boxes.filter { $0.text.contains("基础体重") }
+        for label in labelBoxes {
+            let rowTol = max(label.box.height, 0.012) * 1.8
+            // 同行右侧候选(允许 label.right 之后 / 同行 cy 内)
+            let sameRowRight = boxes
+                .filter { $0.left > label.right - 0.005 }
+                .filter { abs($0.cy - label.cy) <= rowTol }
+                .sorted { $0.cx < $1.cx }
+            for cand in sameRowRight {
+                if let v = parseKgNumber(cand.text) {
+                    return (v, cand.text)
+                }
+            }
+        }
+        return nil
     }
 
     /// 在 boxes 中寻找匹配 keys 之一的标签,并返回其最可能对应的数值。
@@ -312,6 +408,27 @@ final class OCRService: Sendable {
         labels = labels.filter { box in
             let id = "\(box.box.minX),\(box.box.minY),\(box.text)"
             return seen.insert(id).inserted
+        }
+
+        // Fix 4 (2026-05-24):排除被 competitor key 以更长子串吃掉的标签。
+        // 例如 weight 用 key '体重',但 '去脂体重'(leanBodyMass key)也含 '体重',
+        // 不过滤会让 '去脂体重' 被当作 weight 的标签,值跑到 leanBodyMass 行。
+        // 规则:若某个 competitorKey 在 label 文本中匹配长度 > 本字段任一 key 的
+        // 匹配长度,则该 box 属于竞争字段,跳过。
+        labels = labels.filter { box in
+            let myBest = sortedKeys.first(where: { containsKey(box.text, key: $0) })?.count ?? 0
+            let competitorBest = competitorKeys
+                .filter { containsKey(box.text, key: $0) }
+                .map { $0.count }
+                .max() ?? 0
+            return competitorBest <= myBest
+        }
+
+        // Fix 3 (2026-05-24):跳过含数学符号(=,×,÷)的"公式标签"。
+        // 例如 InBody 230 报告里 '=一体脂肪×100' 这种公式行也含 '体脂肪',
+        // 不过滤会被当作合法标签,导致从公式行里抽到错误数字。
+        labels = labels.filter { box in
+            !box.text.contains("=") && !box.text.contains("×") && !box.text.contains("÷")
         }
 
         // 针对每个标签,先尝试同行右侧,期望区间优先
@@ -371,10 +488,29 @@ final class OCRService: Sendable {
             // 在 narrowed 区间内的候选先做评分;若全军覆没再回到 expected。
             let inNarrowed = rowCandidates.filter { narrowed.contains($0.value) }
             let inExpected = rowCandidates.filter { expected.contains($0.value) }
+
+            // ── Pattern D (2026-05-24): "硬收紧" ─────────────────────────────
+            // 当行内印刷范围存在但所有同行数字候选都落在 narrowed 之外,
+            // 说明 Vision 看到的值跟该字段的"参考范围"不兼容 —— 多半是
+            // 邻行(例如骨骼肌的 31.7 渗到体脂肪行,或柱状图轴刻度 160 渗到
+            // 体重行)在作怪。继续到下一个 label,而不是退回 inExpected:
+            // 后者会把"最右侧的合法数"也算正确答案,正是 Pattern A/B/C
+            // 在反复修补的问题。
+            // 仅在 rowRange != nil 时启用硬收紧 —— 无柱状图的字段
+            // (BMI / WHR / BMR 等)保持宽松回退,避免误伤。
+            if rowRange != nil && inNarrowed.isEmpty {
+                continue
+            }
+
             let pool = !inNarrowed.isEmpty ? inNarrowed : inExpected
 
             if !pool.isEmpty {
-                if let best = pickHighestScoring(pool, allRowCandidates: rowCandidates) {
+                if let best = pickHighestScoring(
+                    pool,
+                    allRowCandidates: rowCandidates,
+                    labelCy: label.cy,
+                    rowTol: rowTol
+                ) {
                     return (best.value, best.box.text)
                 }
             }
@@ -434,7 +570,9 @@ final class OCRService: Sendable {
     /// (max-min)/mean < 0.4,则判为等差数列;序列里的每个值都扣分。
     private func pickHighestScoring(
         _ pool: [(value: Double, box: TextBox)],
-        allRowCandidates: [(value: Double, box: TextBox)]
+        allRowCandidates: [(value: Double, box: TextBox)],
+        labelCy: CGFloat,
+        rowTol: CGFloat
     ) -> (value: Double, box: TextBox)? {
         guard !pool.isEmpty else { return nil }
 
@@ -487,6 +625,16 @@ final class OCRService: Sendable {
             // +1 最右
             if abs(cand.box.cx - rightmostCx) < 0.005 {
                 s += 1
+            }
+            // +2 Pattern E (2026-05-24):候选 cy 落在 rowTol 内圈 40%
+            // —— 视为"真正同行",优先于跨行渗透值。rowTol = 1.8 × label.height
+            // 比较宽松,会把上下相邻行的值也吸进来(例如 InBody 230 骨骼肌行
+            // cy=0.725 把体脂肪行 cy=0.709 的 25.7 也算同行,导致 +1 rightmost
+            // 让错误答案胜出)。内圈 40% (≤ rowTol × 0.4) 才算"贴脸",
+            // 给一个 +2 的强势加分把渗透值压回去。
+            let cyDist = abs(cand.box.cy - labelCy)
+            if cyDist <= rowTol * 0.4 {
+                s += 2
             }
             // -5 等距整数群成员
             if axisValueSet.contains(cand.value) {
