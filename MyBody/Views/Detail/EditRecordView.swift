@@ -110,12 +110,14 @@ struct EditRecordView: View {
     /// 若用户在设置中开启了「同步体重到健康」，把当前体重写入 HealthKit。
     /// 失败静默忽略：用户体验上保存按钮应该总是能关闭页面，
     /// HealthKit 错误不应阻塞 SwiftData 持久化。
+    /// 使用带 SyncIdentifier 的写入路径，重复保存同一 record 不会产生重复样本。
     private func syncWeightToHealthIfEnabled() {
         guard UserDefaults.standard.bool(forKey: "syncWeightToHealth"),
               let weight = record.weight else { return }
         let date = record.scanDate
+        let recordID = record.id
         Task.detached {
-            try? await HealthKitService.shared.saveWeight(weight, date: date)
+            try? await HealthKitService.shared.saveWeight(weight, date: date, recordID: recordID)
         }
     }
 

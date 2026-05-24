@@ -1,0 +1,40 @@
+// HealthKitWeightWriteUITests.swift — DEFERRED PLACEHOLDER
+//
+// Phase 2 (2026-05-24): the 5 UI tests from Parker's Phase 1 plan
+// (`.squad/decisions.md` → "Weight Write-to-Health Test Plan") cannot be
+// implemented yet because Lambert has not wired the launch-arg mocks
+// `-MOCK_HEALTH_GRANTED 1` / `-MOCK_HEALTH_DENIED 1` (Ripley to wire per
+// the architecture decision). Writing them today would require the test
+// to either touch the real HealthKit prompt (flaky, not CI-safe) or stub
+// at the wrong layer.
+//
+// **Required launch args (TODO for Ripley/Lambert):**
+//   -MOCK_HEALTH_GRANTED 1   → bypass auth prompt, write succeeds
+//   -MOCK_HEALTH_DENIED  1   → bypass auth prompt, simulate .sharingDenied
+//   -MOCK_HEALTH_EMPTY   1   → simulate iPad/Catalyst isAvailable == false
+//
+// **Test cases to implement once mocks land:**
+//
+//   test_trendsToolbar_writeHealthButton_visibleOnWeightTab
+//     Launch on Trends; assert toolbar item "写入健康" is visible when
+//     selectedMetric == .weight.
+//
+//   test_trendsToolbar_writeHealthButton_hiddenOnOtherTabs
+//     Switch metric to .bodyFatPercent / .skeletalMuscle; assert the
+//     toolbar item disappears (not just disabled — fully hidden).
+//
+//   test_writeHealth_successFlow_showsSummaryDialog
+//     With -MOCK_HEALTH_GRANTED 1, tap → confirm dialog → success alert
+//     reports "已写入 N，跳过 0，失败 0".
+//
+//   test_writeHealth_deniedPermission_showsDeepLinkAlert
+//     With -MOCK_HEALTH_DENIED 1, tap → alert presents "去设置" deep-link
+//     button that opens UIApplication.openSettingsURLString.
+//
+//   test_writeHealth_emptyTrends_buttonDisabled
+//     Filter Trends to a range with zero weight records; toolbar item is
+//     present but disabled (no write attempt).
+//
+// **Activation criteria:** delete this header and replace with real
+// `XCTestCase` implementations once Lambert merges the launch-arg
+// reading code and Ripley confirms the mock injection point.

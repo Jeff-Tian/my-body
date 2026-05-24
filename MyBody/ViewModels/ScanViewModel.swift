@@ -182,11 +182,13 @@ final class ScanViewModel {
             savedCount += 1
 
             // 可选：把体重写入系统「健康」App。失败时静默忽略，避免阻塞批量导入。
+            // 带 SyncIdentifier(record.id)，重复扫描同一张相册照片不会产生重复 HK 样本。
             if UserDefaults.standard.bool(forKey: "syncWeightToHealth"),
                let weight = record.weight {
                 let date = record.scanDate
+                let recordID = record.id
                 Task.detached {
-                    try? await HealthKitService.shared.saveWeight(weight, date: date)
+                    try? await HealthKitService.shared.saveWeight(weight, date: date, recordID: recordID)
                 }
             }
         }
@@ -317,11 +319,13 @@ final class ScanViewModel {
             try? context.save()
             savedCount += 1
 
+            // Data 路径：同样走带 SyncIdentifier 的写入。
             if UserDefaults.standard.bool(forKey: "syncWeightToHealth"),
                let weight = record.weight {
                 let date = record.scanDate
+                let recordID = record.id
                 Task.detached {
-                    try? await HealthKitService.shared.saveWeight(weight, date: date)
+                    try? await HealthKitService.shared.saveWeight(weight, date: date, recordID: recordID)
                 }
             }
         }

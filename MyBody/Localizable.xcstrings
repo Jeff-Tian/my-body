@@ -1,5 +1,101 @@
 {
   "sourceLanguage" : "zh-Hans",
-  "strings" : {},
+  "strings" : {
+    "写入健康" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Write to Health" } }
+      }
+    },
+    "将体重历史写入「健康」App" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Write weight history to the Health app" } }
+      }
+    },
+    "选择范围" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Choose Range" } }
+      }
+    },
+    "全部历史" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "All History" } }
+      }
+    },
+    "当前图表范围" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Current Chart Range" } }
+      }
+    },
+    "最近 30 天" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Last 30 Days" } }
+      }
+    },
+    "取消" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Cancel" } }
+      }
+    },
+    "正在写入..." : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Writing…" } }
+      }
+    },
+    "写入完成" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Write Complete" } }
+      }
+    },
+    "已写入 %lld 条" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Wrote %lld samples" } }
+      }
+    },
+    "已跳过 %lld 条 (重复)" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Skipped %lld (duplicates)" } }
+      }
+    },
+    "已跳过 %lld 条 (无效)" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Skipped %lld (invalid)" } }
+      }
+    },
+    "失败 %lld 条" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Failed %lld" } }
+      }
+    },
+    "查看失败详情" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Show Failed Details" } }
+      }
+    },
+    "好" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "OK" } }
+      }
+    },
+    "需要健康权限" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Health Permission Needed" } }
+      }
+    },
+    "打开设置" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Open Settings" } }
+      }
+    },
+    "失败详情" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Failed Details" } }
+      }
+    },
+    "完成" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Done" } }
+      }
+    }
+  },
   "version" : "1.0"
 }
