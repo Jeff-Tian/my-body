@@ -140,3 +140,79 @@ App 看到的 `55 / 60 / 40` 全是整数,正好匹配三行的轴刻度。**实
 - All meaningful changes require team consensus
 - Document architectural decisions here
 - Keep history focused on work, decisions focused on direction
+# 2026-05-24: InBody OCR axis-scale fix — implementation (Plan A + B)
+
+**By:** Ash (Core Engineer)
+
+**What:** Implemented Plan A (candidate scoring) + Plan B (printed-range
+sanity check) in `OCRService.findValue` to stop axis ticks from winning
+over real measurements in `IMG_2245.HEIC`-class reports.
+
+## Plan B — printed range narrowing (runs first per label row)
+
+Scan same-row boxes that pass `isPureRange`, parse the first one back
+into `(low, high)` via new `parsePrintedRange`. Narrow that field's
+`expected` to `[low × 0.5, high × 1.5]` clipped to the original spec.
+This kills far axis ticks (115/130/145 on the weight row) before
+scoring even runs.
+
+If no printed range is found on the row → keep the original `expected`.
+Existing fields without bar charts (BMI/WHR/BMR/visceral fat) are
+unaffected because they typically have no `isPureRange` box on the row.
+
+## Plan A — scoring (replaces `rowFiltered.first(where:)`)
+
+New `pickHighestScoring` takes the post-narrow candidate pool plus the
+full row candidate set (for axis-tick detection). Weights chosen:
+
+| Signal | Δ | Rationale |
+|---|---|---|
+| Text contains `kg` / `%` / `kcal` | +4 | Measured values carry units; ticks don't. |
+| Value is a decimal (`.` in text AND non-integer) | +2 | Ticks are integers; measurements are decimals. |
+| Box height ≥ row Q3 height | +2 | Printed measurement font is 2-3× tick font. |
+| Rightmost cx in pool (±0.005) | +1 | Measurement sits at bar end. |
+| Member of equidistant integer group (3+, spread<0.4) | -5 | Axis ticks. |
+
+Pool selection:
+- First try candidates in `narrowed` (Plan B) range.
+- If empty (e.g. Plan B not applicable), fall back to `expected`.
+- If the winner's score is negative → return nil → outer fallback chain
+  takes over (distance-to-range, below-column).
+
+Tie-break: highest score, then rightmost cx.
+
+## Edge cases handled
+
+- **No printed range on row** → Plan B no-op, scoring still runs on `expected`.
+- **All candidates score negative** (e.g. only ticks present) → bypass
+  scoring, run legacy distance-to-range fallback (preserves recovery
+  for misaligned rows).
+- **`pool` empty after narrowing but `expected` candidates exist** →
+  fall back to `expected` pool. This protects against an overly tight
+  printed range we shouldn't trust.
+- **Q3 height degenerate** (single candidate or zero heights) → set
+  to 0 and skip the +2 height bonus rather than divide-by-zero.
+- **Equidistant detection requires meanGap > 0.001** → guards against
+  all-zero cx in degraded data.
+
+## What did NOT change
+
+- Plan C (4+ integer axis filter) — only a piece of it lives in the -5
+  weight; not a separate prefilter.
+- `isPureRange` regex — unchanged.
+- `primaryNumber` — unchanged.
+- Outer fallback chain (below-column, allow-pure-range) — preserved.
+
+## Verification
+
+- `make build` (iphonesimulator, Debug) → **Build Succeeded** with only
+  the pre-existing `usesCPUOnly` deprecation warning. No new warnings.
+- Runtime verification pending Parker's `IMG_2245.HEIC` fixture
+  (decisions.md, weight=68.1 / skeletalMuscle=31.7 / bodyFatMass=12.0).
+
+## Follow-ups
+
+- Parker: fixture-based snapshot test against the box dump.
+- Ripley: confirm the scoring weights live in `OCRService` (not a
+  separate `OCRScorer` service) — current shape keeps it surgical and
+  inside the only consumer.
