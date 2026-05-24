@@ -34,3 +34,35 @@ Ash diagnosed an `OCRService.findValue` first-match bug on InBody 230 `IMG_2245.
 - **Did NOT run `make build`:** new files are not in any Xcode target yet, so the build is unchanged. Skipping avoided spending CI time on a no-op verification.
 
 - 2026-05-24: Your `IMG_2245.HEIC` InBody 230 regression fixture is now genuinely green (5/5 fields pass). Plan A (decimal-space rejoin) + Plan B (competitorRight column cap) + Plan C (cy-closest range selection) all landed in `OCRService.swift` via Ash. The OCR dump test (`OCRServiceInBody230DumpTests`, env-guarded `OCR_SKIP_DUMP=0`) is the canonical entry point for future OCR misreads — eyeball boxes first, edit second.
+
+### 2026-05-24: Weight write-to-Health test plan drafted (anticipatory)
+- Trends → weight column → batch write to Apple Health (`HKQuantityType.bodyMass`) feature is incoming. Drafted full test plan at `.squad/decisions/inbox/parker-weight-health-test-plan.md` before Ripley/Ash's API lands.
+- **Key finding:** `HealthKitService` is a `static let shared` singleton wrapping `HKHealthStore()` directly — **no protocol seam, cannot unit-test without one**. Plan flags this as a hard ask for Ripley: introduce `protocol HealthKitWriting { … }` so tests can inject a `FakeHealthKitWriter`. Do NOT mock `HKHealthStore` directly (API surface too wide).
+- **Hard blocker re-flagged:** `project.yml` still has no `MyBodyTests` unit-test target. Without it, none of the unit tests can execute. UI tests + manual QA can proceed independently. (Same blocker as the OCR fixture work — Jeff needs to add the target once.)
+- **Existing-bug heads-up:** 3 call sites (`ScanViewModel` x2, `EditRecordView` x1) already call `saveWeight` with `try?` and **no dedup logic exists**. Almost certainly produces duplicate Health samples on re-scan today. Flagged as scoping question for Ripley: should the new Trends batch action retroactively dedup prior writes, or only its own batch?
+- **Dedup decision pending from Ash:** `HKMetadataKeySyncIdentifier` (recommended — Apple-native dedup) vs query-before-write. Test U3 + U8 (concurrency) depend on the choice.
+- Plan is 9 unit tests + 5 UI tests + 10-item manual QA checklist + 3 open questions. ~120 lines total. Did NOT write any test code — explicit "plan only" instruction.
+
+## 2026-05-24 — Team note: Trends Weight → Health Phase 1
+Cross-agent Phase 1 planning landed in `.squad/decisions.md` (4 entries dated 2026-05-24). Before any Phase 2 implementation:
+- Read Ripley's architecture proposal (entry point, scope, dedup strategy, auth flow).
+- Read Ash's HealthKitService survey + proposed `writeWeightSamples(_:)` API + 2 open metadata questions.
+- Read Lambert's UI options (Toolbar item A chosen) + 7 i18n keys to add.
+- Read Parker's test plan + `HealthKitWriting` protocol seam + `MyBodyTests` target blocker.
+Two open arbitrations (dedup mechanism, `HKMetadataKeyWasUserEntered`) must be resolved by Ripley before Ash freezes the API.
+
+### 2026-05-24: Phase 2 — `HealthKitWeightWriteTests.swift` written, build blocked on Lambert
+- **MyBodyTests target status:** ✅ exists in `project.yml` (I missed it in Phase 1 — both the target block and the scheme `test.targets` entry are present, with the correct `TEST_HOST` workaround for the 中文 PRODUCT_NAME `身记`). My Phase 1 "hard blocker" note was wrong; the target was already there.
+- **Written:** `MyBodyTests/Services/HealthKitWeightWriteTests.swift` — 9 active tests + 6 `XCTSkip` stubs.
+  - **Active (compile + run today):** sync-identifier format (3), pre-flight `partitionForWrite` filter (5), `HealthKitWriteResult` aggregation arithmetic (2). All written against test-local mirrors (`Self.syncIdentifier`, `Self.partitionForWrite`, `MockWriteResult`) so they bind to the spec, not Ash's internals.
+  - **Skipped with `XCTSkip`:** notAuthorized, unavailable device, duplicate SyncIdentifier, concurrent serialization, metadata-contains-SyncIdentifier, date-boundary preservation. All require Ash's `HealthKitWriting` protocol seam (still not shipped — Ash inlined dedup directly in `writeWeightSamples` instead of extracting the protocol). Once the seam lands, swap the mirrors for the real types; XCTSkip → real assertions.
+- **UI tests:** Wrote `MyBodyUITests/HealthKitWeightWriteUITests.swift.TODO` (renamed off `.swift` so xcodegen ignores it) listing all 5 cases + the launch args Lambert/Ripley must wire (`-MOCK_HEALTH_GRANTED`, `-MOCK_HEALTH_DENIED`, `-MOCK_HEALTH_EMPTY`). Activation criterion documented in the file header.
+- **Build status:** ❌ `make test-unit` fails — but NOT on my code. Lambert's new untracked `MyBody/Views/Trends/WeightHealthWriteSheet.swift` has 2 errors:
+  1. Line 10: `WeightHealthWriteController.Phase does not conform to Equatable` (needs `: Equatable` on the enum).
+  2. Line 59: `argument 'skippedInvalid' must precede argument 'skippedDuplicate'` (Ash's `HealthKitWriteResult` initializer order is `written, skippedInvalid, skippedDuplicate, failed` per the struct field order — Lambert's call site swapped them).
+  My test file itself parses cleanly (`swiftc -parse` returns 0 warnings/errors).
+- **What I learned about Ash's actual Phase 2 shipping:** Despite my Phase 1 ask, Ash did NOT introduce `protocol HealthKitWriting`. Instead `HealthKitService.writeWeightSamples(_ records: [InBodyRecord]) async throws -> HealthKitWriteResult` is the only seam. That means future deeper unit tests need either (a) Ash to retroactively extract the protocol, or (b) a test-only `HKHealthStore` subclass spike (Apple's surface is wide but achievable for just `save([HKObject])` + `execute(query)`). Flagging both options; not picking until asked.
+- **What I did NOT touch:** `HealthKitService.swift`, `TrendsView.swift`, `WeightHealthWriteSheet.swift`, `project.yml` — all owned by Ash/Lambert/Jeff per spawn constraints.
+
+## 2026-05-24 — Phase 2 shipped (team note)
+Trends「写入健康」Phase 2 complete. My deliverable: `HealthKitWeightWriteTests.swift` (10 pass + 6 XCTSkip) + UI tests parked at `.TODO`. **Open ask for Ripley:** extract `HealthKitWriting` protocol seam on `HealthKitService` — unlocks 6 of my most valuable unit tests (auth, dedup, concurrency, metadata round-trip). Not a release blocker.

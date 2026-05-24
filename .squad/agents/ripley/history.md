@@ -38,3 +38,14 @@ Ash proposed Plan A (per-row candidate scoring inside `OCRService.findValue`) + 
 - 修复：在 `project.yml` 的 `MyBody.settings.base` 显式加 `PRODUCT_MODULE_NAME: MyBody`。bundle/二进制名仍是中文，只锁模块标识符。
 - 验证：`make gen` → `make test-unit` 编译通过，测试在 iOS 26.5 模拟器上运行；`make build` 仍 `Build Succeeded`。
 - 启示：任何非 ASCII PRODUCT_NAME 上线测试 target 时都要先显式 PRODUCT_MODULE_NAME，否则 `@testable import` 必炸。
+
+### 2026-05-24: Trends → Apple Health weight write — architected
+Proposed Trends 页面在选中 weight 时通过 toolbar 「写入健康」+ confirmation dialog 触发批量写入。**关键架构决定：去重用 HealthKit metadata key `com.jefftian.mybody.recordID = UUID` + 写前 HKSampleQuery**，**不**在 `InBodyRecord` 上增加 `syncedSampleIDs` 字段。理由：HealthKit 自身是真相源，跨设备/重装/iCloud 同步天然一致；不污染 SwiftData schema；Scan/Edit 现有写入路径也能回填同一 key 向后兼容。新 API `saveWeightIfNew(_:date:recordID:)` 返回是否真写入，调用方可统计 written/skipped/failed。授权延迟到首次点击（非进入 Trends 时），denied 跳系统设置。Entitlement 已 OK（empty `healthkit.access` 数组对 bodyMass 正确，仅临床记录类需要项）。提案文件：`.squad/decisions/inbox/ripley-weight-health-write-proposal.md`。下一步 Lambert 实现 UI/VM、Ash 实现 dedup API、Parker 加 mock store 测试。
+
+## 2026-05-24 — Team note: Trends Weight → Health Phase 1
+Cross-agent Phase 1 planning landed in `.squad/decisions.md` (4 entries dated 2026-05-24). Before any Phase 2 implementation:
+- Read Ripley's architecture proposal (entry point, scope, dedup strategy, auth flow).
+- Read Ash's HealthKitService survey + proposed `writeWeightSamples(_:)` API + 2 open metadata questions.
+- Read Lambert's UI options (Toolbar item A chosen) + 7 i18n keys to add.
+- Read Parker's test plan + `HealthKitWriting` protocol seam + `MyBodyTests` target blocker.
+Two open arbitrations (dedup mechanism, `HKMetadataKeyWasUserEntered`) must be resolved by Ripley before Ash freezes the API.

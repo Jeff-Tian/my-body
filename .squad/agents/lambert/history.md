@@ -40,3 +40,46 @@
 - **Error handling pattern:** 先 `as? ScanViewModel.ReparseError`（已是 `LocalizedError`，中文文案完整），再 Photos 域兜底，最后 `localizedDescription`。
 - **Coordination:** Ash 并行交付 `ScanViewModel.reparseExistingReport(_:context:ocrService:) async throws -> OCRService.ParsedReport`；UI 用 `_ = try await` 丢弃返回值。
 - **Test status:** `make test-unit` 通过（2 tests, 0 failures）。
+
+## 2026-05-24: Trends 体重→Health 写入入口 — UI survey (Phase 1)
+
+- TrendsView 的 metric 选择是 **horizontal ScrollView + 胶囊 Button**，不是 Picker；状态在 `TrendsViewModel.selectedMetric: MetricType`（@Observable）。判定「当前选中体重」= `viewModel.selectedMetric == .weight`，无需新增 binding。
+- `HealthKitService.shared.saveWeight(_:date:)` + `requestAuthorization()` 已存在；`SettingsView` 已有「同步体重到健康」总开关（控制自动同步）。本入口语义是「手动补写历史」，应独立于全局开关。
+- UI 推荐：**NavigationBar toolbar item**（`heart.text.square`），仅当 selectedMetric==.weight 时显示。优于 chart 下方 section（避免切换 metric 时滚动跳动）和 History row swipe（与 metric 条件不匹配）。
+- 已落 design note 到 `.squad/decisions/inbox/lambert-weight-health-ui-options.md`，含 7 个 i18n key (zh-Hans + en)、a11y 注意点、4 个待 Ripley 决定的开放问题（写入范围 / 去重 / 错误反馈 / 进度）。
+- 等 Ripley 架构提案合并后进 Phase 2（实现 toolbar button + confirm dialog + 反馈）。
+
+## 2026-05-24 — Team note: Trends Weight → Health Phase 1
+Cross-agent Phase 1 planning landed in `.squad/decisions.md` (4 entries dated 2026-05-24). Before any Phase 2 implementation:
+- Read Ripley's architecture proposal (entry point, scope, dedup strategy, auth flow).
+- Read Ash's HealthKitService survey + proposed `writeWeightSamples(_:)` API + 2 open metadata questions.
+- Read Lambert's UI options (Toolbar item A chosen) + 7 i18n keys to add.
+- Read Parker's test plan + `HealthKitWriting` protocol seam + `MyBodyTests` target blocker.
+Two open arbitrations (dedup mechanism, `HKMetadataKeyWasUserEntered`) must be resolved by Ripley before Ash freezes the API.
+
+## 2026-05-24 — Trends 体重→健康 写入 UI (Phase 2)
+
+实现了 `TrendsView` 的 NavBar 工具栏「写入健康」按钮 + 范围选择 + 进度 + 结果/错误对话框。Ash 的 `writeWeightSamples(_:) async throws -> HealthKitWriteResult` 已在 `HealthKitService.swift` 落地（确认存在 `written/skippedInvalid/skippedDuplicate/failed` 四字段；构造器默认全 0；`failed: [(UUID, Error)]`）。
+
+**关键模式 / 复用价值**:
+- **`WeightHealthWriteController` 独立 `@Observable`**: 把工具栏交互、状态机、Service 调用从 `TrendsView` 抽出。`TrendsView.body` 只多了一个 `.toolbar` + 一个 `.modifier(...)`。将来 Body Fat / 其它指标做同样的 HK 写入只需复制此 controller。
+- **`recordsForRange: @escaping (Range) -> [InBodyRecord]`**: 控制器不依赖 `TrendsViewModel` / SwiftData / `TimeFilter`，外部注入选择器闭包。`onAppear` 里捕获 `viewModel.records` / `viewModel.filteredRecords` 做范围解析。
+- **`ViewModifier` 收纳 dialog/overlay/alert**: 4 个 modifier 链堆在 body 里会很难读，抽到 `WeightHealthWriteOverlay: ViewModifier` 之后只剩一行 `.modifier(...)`。
+- **`Phase` 枚举不要写 `Equatable`**: 因为 `case error(message: String, isAuthDenied: Bool)` + `case result(HealthKitWriteResult)` 间接含 `Error`（non-Equatable）和元组（不能合成 Equatable）。改用 helper（`isWriting` / `resultForDisplay`）做派生状态。
+- **工具栏条件 `selectedMetric == .weight && HealthKitService.shared.isAvailable`**: 切到其它指标自动隐藏；模拟器上 HealthKit 不可用时也隐藏，避免点了报错。
+- **`UIApplication.openSettingsURLString` 深链系统设置**: `HealthKitError.notAuthorized` 时按钮直接打开本 app 的设置页（含「健康」开关）。
+- **`Localizable.xcstrings` 用 zh-Hans 原文做 key**: 项目源语言 `zh-Hans`，代码里直接写中文（如 `Text("写入健康")`），xcstrings 只补 `en` localization 即可，无需 zh-Hans 条目。19 个新 key 已加。
+
+**坑**:
+- 第一次构建报 `HealthKitWriteResult` 构造器参数顺序错 —— 字段定义顺序是 `written / skippedInvalid / skippedDuplicate / failed`，不是 `written / skippedDuplicate / skippedInvalid / failed`（我按 Ash 早先 survey 写的）。`HealthKitWriteResult()` 全默认值最稳。
+- `presenting:` modifier 要求 `Identifiable`，所以 error alert 用了私有 `ErrorPayload` 包装一下 `(message, isAuthDenied)`。
+
+**文件**:
+- `MyBody/Views/Trends/TrendsView.swift` — 加 toolbar / state / onAppear 初始化 controller / `.modifier`
+- `MyBody/Views/Trends/WeightHealthWriteSheet.swift` — 新文件: controller + overlay modifier + ProgressOverlay + FailedRecordsSheet
+- `MyBody/Localizable.xcstrings` — 19 个 EN 翻译
+
+**构建状态**: `make build` 通过 ✅
+
+## 2026-05-24 — Phase 2 shipped (team note)
+Trends「写入健康」Phase 2 complete. My deliverable: `WeightHealthWriteController` + overlay modifier + TrendsView toolbar + 19 i18n keys. Post-build fix: corrected `HealthKitWriteResult` field order + `Phase: Equatable`. Pattern is reusable for future HK writes (body fat, water, etc.). Ash shipped the service; Parker shipped tests.

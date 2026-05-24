@@ -66,3 +66,32 @@ Full session notes moved to `.squad/agents/ash/history-archive.md` (also capture
 - Pattern D/E/Fix3/Fix4 surgical OCRService fixes recovered 3/5 IMG_2245 assertions; weight + bodyFatMass blocked by Vision (truth values absent from OCR output).
 - Pattern F: "运动处方" footer is the **trusted-override** source for weight when the bar-chart row emits plausible-but-wrong values (`238.0`, `w00.1kg`). `nil`-gated fallback isn't enough; use trusted override when an authoritative alternative source exists in the document.
 - `ScanViewModel.reparseExistingReport` static @MainActor method added — UI escape hatch for re-OCRing existing records; bypasses dedup, overwrites numeric fields in place. Lambert wired DetailView toolbar button.
+
+### 2026-05-24 — HealthKit batch-write survey (Phase 1)
+- Existing `HealthKitService` writes one bodyMass sample per call via `saveWeight(_:date:)`; no dedupe metadata (no `HKMetadataKeySyncIdentifier`), no batch API, callers (ScanVM × 2, EditRecordView) all use `try?`.
+- Entitlements + Info.plist already correct: HealthKit cap on, `NSHealthUpdateUsageDescription` and `NSHealthShareUsageDescription` cover batch weight writes. No plist changes needed.
+- Data model is `InBodyRecord` (not `Report`); weight field = `weight: Double?` (kg), date = `scanDate: Date`, identity = `id: UUID` — use UUID as `HKMetadataKeySyncIdentifier` for idempotent re-writes.
+- Phase-2 API drafted: `writeWeightSamples(_ records: [InBodyRecord]) async throws -> HealthKitWriteResult` returning `written / skippedDuplicate / skippedInvalid / failed`. Pre-flight checks throw; per-sample errors collected. Survey saved to `.squad/decisions/inbox/ash-healthkit-write-survey.md`.
+- Flagged for Ripley: `HKMetadataKeyWasUserEntered=true` for OCR-derived samples is questionable; whether existing single-record callers should migrate to the batch API to share dedupe.
+
+## 2026-05-24 — Team note: Trends Weight → Health Phase 1
+Cross-agent Phase 1 planning landed in `.squad/decisions.md` (4 entries dated 2026-05-24). Before any Phase 2 implementation:
+- Read Ripley's architecture proposal (entry point, scope, dedup strategy, auth flow).
+- Read Ash's HealthKitService survey + proposed `writeWeightSamples(_:)` API + 2 open metadata questions.
+- Read Lambert's UI options (Toolbar item A chosen) + 7 i18n keys to add.
+- Read Parker's test plan + `HealthKitWriting` protocol seam + `MyBodyTests` target blocker.
+Two open arbitrations (dedup mechanism, `HKMetadataKeyWasUserEntered`) must be resolved by Ripley before Ash freezes the API.
+
+## 2026-05-24 — Weight→Health Phase 2 implementation
+- Added `HealthKitWriteResult` (written / skippedInvalid / skippedDuplicate / failed:[(UUID,Error)]) + `writeWeightSamples(_:[InBodyRecord]) async throws -> HealthKitWriteResult` for batch backfill.
+- Added single-sample dedup overload `saveWeight(_ kg:Double, date:Date, recordID:UUID)`; kept legacy `saveWeight(_:date:)` for back-compat (no dedup).
+- All writes now carry `HKMetadataKeyWasUserEntered = false` (was previously `true` — wrong, OCR is not manual entry).
+- Dedup path: **query-first by SyncIdentifier + save-with-SyncIdentifier double protection** — query gives accurate `skippedDuplicate` count for the UI dialog, save-with-SyncIdentifier (`HKMetadataKeySyncIdentifier = record.id.uuidString` + `HKMetadataKeySyncVersion = 1`) covers query→save races via HK's replace-by-version semantics.
+- Refactored all 3 legacy `try? saveWeight(weight, date:)` call sites (EditRecordView L118, ScanViewModel L189/L324) to pass `recordID: record.id`. Extract id/weight/date as Sendable primitives BEFORE `Task.detached` to avoid sending SwiftData `@Model` across actors.
+- `writeWeightSamples` reads `record.weight/scanDate/id` synchronously into local `Candidate` structs before the first `await` to stay safe under Swift 6 isolation.
+- Pre-flight auth: `.notDetermined` triggers a single prompt; on `.sharingDenied` after prompt → throws `HealthKitError.notAuthorized`. Per-sample errors aggregate into `result.failed` (never thrown).
+- Batch save is atomic via `store.save([HKObject])`; on failure falls back to per-sample save to locate which records failed.
+- `make build` ✅.
+
+## 2026-05-24 — Phase 2 shipped (team note)
+Trends「写入健康」Phase 2 complete. My deliverable: `writeWeightSamples` + `HealthKitWriteResult` + dedup-enabled `saveWeight(_:date:recordID:)`. Lambert built UI on top; Parker shipped 10 active tests. **Open:** Ripley arbitration on `HealthKitWriting` protocol seam — extracting it unlocks Parker's 6 skipped unit tests.
