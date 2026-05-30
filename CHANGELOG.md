@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.0] - 2026-05-30
+
+### zh-Hans
+- 增强重新识别功能并改善OCR验证逻辑。
+- 添加可缩放照片视图以提升全屏照片交互体验。
+- 修复手势释放时的闪烁问题。
+- 记录全屏照片视图的缩放/平移决策。
+
+### en-US
+- Enhanced re-recognition functionality and improved OCR validation logic.  
+- Added ZoomablePhoto view for better image interaction in FullPhotoView.  
+- Resolved flickering issue on gesture release.  
+- Improved alert presentation and updated changelog.
+
 ## [1.0] - 2026-05-24
 
 ### zh-Hans
