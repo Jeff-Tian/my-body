@@ -30,11 +30,25 @@ final class WeightHealthWriteController {
         }
     }
 
+    /// Payload for the error alert. Kept independent from `phase` so the alert's
+    /// lifetime is owned solely by user dismissal — not by any state transition.
+    struct ErrorInfo: Equatable {
+        let message: String
+        let isAuthDenied: Bool
+    }
+
     var phase: Phase = .idle
     var showRangeDialog = false
-    var showResultAlert = false
-    var showErrorAlert = false
     var showFailedDetails = false
+
+    /// Result snapshot driving the "写入完成" alert. Set once on successful write,
+    /// cleared ONLY by user dismissal. Independent of `phase` so a phase change
+    /// (e.g. overlay teardown) cannot cancel the alert presentation.
+    var pendingResult: HealthKitWriteResult?
+
+    /// Error snapshot driving the auth/error alert. Same stickiness contract as
+    /// `pendingResult`: only user dismissal clears it.
+    var pendingError: ErrorInfo?
 
     /// Caller-supplied selector for each range. Keeps this controller free of
     /// `TrendsViewModel` / SwiftData / time filter concerns.
@@ -56,8 +70,9 @@ final class WeightHealthWriteController {
     func userPickedRange(_ range: Range) {
         let records = recordsForRange(range).filter { $0.weight != nil && ($0.weight ?? 0) > 0 }
         guard !records.isEmpty else {
-            phase = .result(HealthKitWriteResult())
-            showResultAlert = true
+            let empty = HealthKitWriteResult()
+            phase = .result(empty)
+            pendingResult = empty
             return
         }
         Task { await runWrite(records: records) }
@@ -68,24 +83,24 @@ final class WeightHealthWriteController {
         do {
             let result = try await service.writeWeightSamples(records)
             phase = .result(result)
-            showResultAlert = true
+            pendingResult = result
         } catch let error as HealthKitError {
             let denied = (error == .notAuthorized)
-            phase = .error(message: error.errorDescription ?? "\(error)", isAuthDenied: denied)
-            showErrorAlert = true
+            let info = ErrorInfo(
+                message: error.errorDescription ?? "\(error)",
+                isAuthDenied: denied
+            )
+            phase = .error(message: info.message, isAuthDenied: info.isAuthDenied)
+            pendingError = info
         } catch {
-            phase = .error(message: error.localizedDescription, isAuthDenied: false)
-            showErrorAlert = true
+            let info = ErrorInfo(message: error.localizedDescription, isAuthDenied: false)
+            phase = .error(message: info.message, isAuthDenied: info.isAuthDenied)
+            pendingError = info
         }
     }
 
     var isWriting: Bool {
         if case .writing = phase { return true }
         return false
-    }
-
-    var resultForDisplay: HealthKitWriteResult? {
-        if case .result(let r) = phase { return r }
-        return nil
     }
 }

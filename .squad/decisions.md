@@ -489,3 +489,32 @@ protocol HealthKitWriting {
 **By:** Parker (Tester/QA)
 **What:** Replaced 6 XCTSkip stubs in `MyBodyTests/Services/HealthKitWeightWriteTests.swift` with real tests against Ash's `FakeHealthKitWriter`: notAuthorized throws, unavailableDevice throws, recordID flow-through, duplicate skip (preExistingRecordIDs), scanDate preservation, concurrent `async let` batches aggregate correctly. `make test-unit` → 18/0/0 (was 18/0/6).
 **Why:** Adaptation: fake records input `[InBodyRecord]` per bulk call, not per-sample HKQuantitySample saves — so metadata/date tests re-aimed at fake's observable surface (recordID + scanDate pass-through). HK `HKMetadataKeySyncIdentifier` invariant becomes production-only, deferred to integration tests when `HealthKitWeightWriteUITests.swift.TODO` lands. Drift documented inline. All Phase 1 + 2 unit-test scope green; ScanViewModel/EditRecordView can now be DI-tested via the protocol without HKHealthStore.
+
+### 2026-05-24: iCloud 照片导入兜底自动下载
+**By:** Ash (requested by Jeff Tian)
+**What:** `PhotoScanService.requestImageSync` 新增 `allowNetwork` 参数。
+- **Scan 阶段**（粗筛全相册）：受 Settings 开关 `iCloudPhotoDownload` 控制，默认 `false`，仅用本地缓存（避免对大量无关照片触发 iCloud 下载、消耗流量）。
+- **Parse 阶段** (`loadFullImage`)：始终 `allowNetwork=true`，保证用户确认导入后能拿到 iCloud 原图，避免出现「只有📄图标、无图无数据」的空记录。
+- Settings 文案同步更新，把开关定位为"扫描时也下载 iCloud 照片"，并说明 parse 阶段始终自动下载。
+
+**Why:** 截图里 2026-05-19 / 05-20 那种空记录的根因 — iCloud 原图未下载、`loadFullImage` 返回 nil、ScanViewModel 回退保存空记录。修复后导入路径具备 iCloud 自动下载兜底。
+
+**Scope:** 仅前向修复。已存在的空记录不做回填（用户可手动重新导入）。
+
+### 2026-05-24: SwiftUI alert presentation must not depend on overlay/state-machine state
+**By:** Lambert (iOS UI Dev)
+**Scope:** Team-wide SwiftUI pattern. Applies to any view using `.alert(_:isPresented:presenting:actions:message:)` alongside `.overlay`, `.sheet`, or `confirmationDialog` driven by the same state machine.
+
+**What:** When presenting an `.alert(...)` whose visibility depends on a state machine that also drives other overlays/sheets on the same view, you **MUST**:
+1. Snapshot the alert's payload (`presenting:` value) into a **dedicated stored optional** on the view-model.
+2. Bind `isPresented` to `Binding(get: { snapshot != nil }, set: { if !$0 { snapshot = nil } })`.
+3. Bind `presenting:` directly to that stored optional.
+4. Every alert button action MUST explicitly set `snapshot = nil` if it should dismiss.
+
+**Do NOT** derive `presenting:` from a computed property reading an enum/state-machine case (e.g. `if case .result(let r) = phase { return r }`). SwiftUI will cancel the alert presentation if the derived value transitions to `nil` during a sibling view's teardown in the same render transaction.
+
+**Why:** Concrete bug hit in TrendsView 写入完成 / 需要健康权限 alerts. `WeightHealthWriteController.phase: Phase` is `.idle → .writing → .result | .error`. Host view had `.overlay { if ctrl.isWriting { ... } }` + two `.alert(...)`. When `phase = .result(...)` fired, ONE SwiftUI transaction (1) dismissed confirmationDialog, (2) tore down overlay (`isWriting` flipped false), (3) tried to present result alert. Because `presenting:` was computed from `phase`, the alert's value-check raced with overlay teardown. Alert presented for ~1 frame then SwiftUI cancelled it. Decoupling alert payload (stored `pendingResult: HealthKitWriteResult?`) from state machine fixes this: once `pendingResult` is set, only user dismissal nils it.
+
+**Where applied:** `MyBody/Views/Trends/WeightHealthWriteSheet.swift` (`pendingResult` + `pendingError: ErrorInfo?`), `MyBody/Views/Trends/TrendsView.swift` (alert bindings on `WeightHealthWriteOverlay`).
+
+**Watch for this in:** Any future view combining (a) state-machine VM (`@Observable` controller with enum-driven `phase`), (b) `.overlay`/`.sheet`/`confirmationDialog` reading from that state, (c) `.alert(...presenting:)` whose value also reads from that state. Apply the same dedicated-optional pattern before shipping.

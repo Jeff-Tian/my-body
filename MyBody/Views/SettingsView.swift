@@ -29,11 +29,11 @@ struct SettingsView: View {
                             Text(range.label).tag(range.rawValue)
                         }
                     }
-                    Toggle("扫描 iCloud 照片", isOn: $iCloudPhotoDownload)
+                    Toggle("扫描时下载 iCloud 照片", isOn: $iCloudPhotoDownload)
                 } header: {
                     Text("相册扫描")
                 } footer: {
-                    Text("扫描范围越小，速度越快。开启 iCloud 扫描会自动下载未缓存的照片进行识别，可能较慢且消耗流量。")
+                    Text("扫描范围越小，速度越快。默认仅扫描本地已缓存的照片；开启此项会在扫描阶段对仅存于 iCloud 的照片也触发下载，可能较慢且消耗流量。导入识别（确认导入后的解析阶段）始终会自动下载所需照片，确保记录里有图。")
                 }
 
                 Section {

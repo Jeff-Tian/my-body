@@ -92,3 +92,30 @@ Trends「写入健康」Phase 2 complete. My deliverable: `WeightHealthWriteCont
 - `cancel` 按钮在 `isReparsing` 期间禁用，避免用户中途丢上下文。
 - Ash 的 ViewModel API 已落地（`duplicateAssetIds: [String]`、`reparseIndex/reparseTotal`、`reparseDuplicateRecords() -> (succeeded, failed, errors)`），UI 直接绑。
 - 教训：嵌套于 `View` 内的 `private struct ReparseSummary` 在 file-private 的 `BatchReparseBanner` 里不可访问，必须显式 `fileprivate` —— Swift 嵌套类型默认沿用包含类型的可见性。
+
+## 2026-05-24 — Result alert auto-dismiss fix (Trends 写入完成)
+
+**Bug (Jeff manual QA):** 「写入完成」alert auto-dismissed before user could read it.
+
+**Root cause:** Both alerts in `WeightHealthWriteOverlay` drove `presenting:` from values **derived** from `WeightHealthWriteController.phase`:
+- `resultForDisplay` = computed `if case .result(let r) = phase`
+- `errorPayload(ctrl.phase)` = same pattern
+
+When write completes, the same render pass does THREE things in one transaction: (1) `confirmationDialog` dismissing, (2) `.overlay { if isWriting }` tearing down (`phase` flips `.writing` → `.result`), (3) alert presentation starts. SwiftUI's `.alert(presenting:)` is fragile to its `presenting` value being a derived expression whose ancestor view recomposes during the presentation transaction — it cancels.
+
+**Fix (Option B — minimal, decouple phase from alert visibility):**
+- Added `var pendingResult: HealthKitWriteResult?` and `var pendingError: ErrorInfo?` as stored properties on `WeightHealthWriteController`.
+- `runWrite` snapshots the result/error into these alongside the phase transition.
+- Removed `showResultAlert`, `showErrorAlert`, `resultForDisplay` (computed). `phase` still drives `isWriting` (overlay) and the `case .result(let r)` read inside `FailedRecordsSheet` sheet content closure.
+- Alerts now bind: `isPresented: Binding(get: { ctrl.pendingX != nil }, set: { if !$0 { ctrl.pendingX = nil } })`, `presenting: ctrl.pendingX`. Each button explicitly clears `pendingX = nil`.
+- Removed unused `private struct ErrorPayload: Identifiable` + `errorPayload(_:)` helper in TrendsView.
+
+**Invariant achieved:** once a pending value is set, NOTHING except a button tap clears it. Phase transitions / overlay teardown / confirmationDialog dismissal are unrelated to alert lifetime.
+
+**Files changed:**
+- `MyBody/Views/Trends/WeightHealthWriteSheet.swift` — controller state shape change.
+- `MyBody/Views/Trends/TrendsView.swift` — alert bindings + dropped ErrorPayload.
+
+**Build/Test:** `make build` ✅. `make test-unit` 18/0/0 ✅ (FakeHealthKitWriter doesn't touch UI bindings).
+
+**Reusable pattern:** When an alert presents on the same frame as a sibling overlay tears down (or any other view recomposition), do NOT use `presenting:` with a value computed from shared state. Snapshot the payload into a dedicated optional whose lifetime is owned solely by user dismissal. Logged team-wide in `decisions/inbox/lambert-alert-stickiness-fix.md`.

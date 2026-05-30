@@ -149,15 +149,18 @@ private struct WeightHealthWriteOverlay: ViewModifier {
                     .alert(
                         Text("写入完成"),
                         isPresented: Binding(
-                            get: { ctrl.showResultAlert },
-                            set: { ctrl.showResultAlert = $0 }
+                            get: { ctrl.pendingResult != nil },
+                            set: { if !$0 { ctrl.pendingResult = nil } }
                         ),
-                        presenting: ctrl.resultForDisplay
+                        presenting: ctrl.pendingResult
                     ) { result in
                         if !result.failed.isEmpty {
-                            Button("查看失败详情") { ctrl.showFailedDetails = true }
+                            Button("查看失败详情") {
+                                ctrl.showFailedDetails = true
+                                ctrl.pendingResult = nil
+                            }
                         }
-                        Button("好") { }
+                        Button("好") { ctrl.pendingResult = nil }
                     } message: { result in
                         Text(resultSummary(result))
                     }
@@ -172,15 +175,18 @@ private struct WeightHealthWriteOverlay: ViewModifier {
                     .alert(
                         Text("需要健康权限"),
                         isPresented: Binding(
-                            get: { ctrl.showErrorAlert },
-                            set: { ctrl.showErrorAlert = $0 }
+                            get: { ctrl.pendingError != nil },
+                            set: { if !$0 { ctrl.pendingError = nil } }
                         ),
-                        presenting: errorPayload(ctrl.phase)
+                        presenting: ctrl.pendingError
                     ) { payload in
                         if payload.isAuthDenied {
-                            Button("打开设置") { openSystemSettings() }
+                            Button("打开设置") {
+                                openSystemSettings()
+                                ctrl.pendingError = nil
+                            }
                         }
-                        Button("好", role: .cancel) { }
+                        Button("好", role: .cancel) { ctrl.pendingError = nil }
                     } message: { payload in
                         Text(payload.message)
                     }
@@ -211,19 +217,6 @@ private struct WeightHealthWriteOverlay: ViewModifier {
             ))
         }
         return lines.joined(separator: "\n")
-    }
-
-    private struct ErrorPayload: Identifiable {
-        let id = UUID()
-        let message: String
-        let isAuthDenied: Bool
-    }
-
-    private func errorPayload(_ phase: WeightHealthWriteController.Phase) -> ErrorPayload? {
-        if case .error(let message, let isAuthDenied) = phase {
-            return ErrorPayload(message: message, isAuthDenied: isAuthDenied)
-        }
-        return nil
     }
 
     private func openSystemSettings() {

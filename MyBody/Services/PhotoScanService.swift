@@ -31,16 +31,22 @@ final class PhotoScanService: ObservableObject {
 
     /// Load image synchronously. isSynchronous=true guarantees the callback
     /// fires exactly once before requestImage returns — no continuation needed.
+    ///
+    /// - Parameter allowNetwork: when `true`, PhotoKit 会在原图仅存于 iCloud 时
+    ///   通过网络下载后再返回，确保拿到完整图片。扫描粗筛阶段传 `false`（避免
+    ///   对相册里成千上万张无关照片触发 iCloud 下载）；parse / 全图加载阶段
+    ///   传 `true`，保证导入后记录里一定有图。
     private nonisolated func requestImageSync(
         for asset: PHAsset,
         targetSize: CGSize,
-        contentMode: PHImageContentMode = .aspectFit
+        contentMode: PHImageContentMode = .aspectFit,
+        allowNetwork: Bool = false
     ) -> UIImage? {
         let options = PHImageRequestOptions()
         options.deliveryMode = .highQualityFormat
         options.resizeMode = .fast
         options.isSynchronous = true
-        options.isNetworkAccessAllowed = UserDefaults.standard.bool(forKey: "iCloudPhotoDownload")
+        options.isNetworkAccessAllowed = allowNetwork
 
         var result: UIImage?
         PHImageManager.default().requestImage(
@@ -106,6 +112,10 @@ final class PhotoScanService: ObservableObject {
         let scanSize = CGSize(width: 800, height: 800)
         let thumbSize = CGSize(width: 200, height: 200)
         let ocr = ocrService
+        // 用户可在 Settings 打开「扫描时也下载 iCloud」开关。默认关：扫描只用
+        // 本地缓存，速度快、不耗流量。开启后会对粗筛阶段每张照片触发 iCloud
+        // 下载（可能很慢、流量大）。无论这里如何，parse 阶段始终会下载 iCloud。
+        let scanAllowsNetwork = UserDefaults.standard.bool(forKey: "iCloudPhotoDownload")
 
         // Run ALL heavy work (image loading + OCR) on a background thread
         let detected: [ScannedPhoto] = await Task.detached(priority: .userInitiated) {
@@ -118,7 +128,11 @@ final class PhotoScanService: ObservableObject {
                     self.stageMessage = "正在读取第 \(i + 1) / \(total) 张照片..."
                 }
 
-                guard let image = self.requestImageSync(for: asset, targetSize: scanSize) else {
+                guard let image = self.requestImageSync(
+                    for: asset,
+                    targetSize: scanSize,
+                    allowNetwork: scanAllowsNetwork
+                ) else {
                     await MainActor.run {
                         self.processedCount = i + 1
                         self.scanProgress = Double(i + 1) / Double(total)
@@ -134,7 +148,8 @@ final class PhotoScanService: ObservableObject {
                     let thumb = self.requestImageSync(
                         for: asset,
                         targetSize: thumbSize,
-                        contentMode: .aspectFill
+                        contentMode: .aspectFill,
+                        allowNetwork: scanAllowsNetwork
                     )
                     results.append(ScannedPhoto(asset: asset, thumbnail: thumb))
                     let detectedSoFar = results.count
@@ -159,7 +174,13 @@ final class PhotoScanService: ObservableObject {
 
     func loadFullImage(for asset: PHAsset) async -> UIImage? {
         await Task.detached(priority: .userInitiated) {
-            self.requestImageSync(for: asset, targetSize: PHImageManagerMaximumSize)
+            // 全图加载用于导入/详情：原图只在 iCloud 时，自动下载到本地，
+            // 避免空记录（截图里只有📄图标、没数据的行就是这种情况）。
+            self.requestImageSync(
+                for: asset,
+                targetSize: PHImageManagerMaximumSize,
+                allowNetwork: true
+            )
         }.value
     }
 }

@@ -144,7 +144,9 @@ platform :ios do
 
     if existing
       UI.success("App 已存在于 ASC，跳过创建：#{APP_IDENTIFIER} (id=#{existing.id})")
-      ensure_draft_version(existing, version: app_marketing_version)
+      resolved = ensure_draft_version(existing, version: app_marketing_version)
+      # 把解析出的版本号写到 ENV，release lane 取出来同步到 pbxproj。
+      ENV['RESOLVED_APP_VERSION'] = resolved
       next existing
     end
 
@@ -188,6 +190,34 @@ platform :ios do
   desc "一键发版:构建 IPA → 上传二进制 + 元数据 + 截图 → 提交审核 → 自动发布"
   lane :release do
     ensure_app_on_asc
+
+    # ensure_app_on_asc 已经查过 ASC 历史版本并 bump 到下一个可用号，
+    # 这里把它同步到 pbxproj，让构建出来的 IPA 的 CFBundleShortVersionString
+    # 跟 ASC 上的 versionString 一致（否则 upload_to_testflight 会 mismatch）。
+    resolved_version = ENV['RESOLVED_APP_VERSION']
+    if resolved_version && !resolved_version.empty?
+      current_local = app_marketing_version
+      if current_local != resolved_version
+        UI.important("[release] 同步 MARKETING_VERSION: #{current_local} → #{resolved_version}")
+        # 用 fastlane 自带的 Xcodeproj gem 直接改 pbxproj，避免依赖
+        # fastlane-plugin-versioning（increment_version_number_in_xcodeproj
+        # 是该插件提供的，不是内建 action）。也绕开内建
+        # increment_version_number 对 VERSIONING_SYSTEM=apple-generic 的强约束。
+        require 'xcodeproj'
+        proj_path = File.expand_path('../MyBody.xcodeproj', __dir__)
+        project = Xcodeproj::Project.open(proj_path)
+        project.targets.each do |t|
+          t.build_configurations.each do |c|
+            next unless c.build_settings.key?('MARKETING_VERSION')
+            c.build_settings['MARKETING_VERSION'] = resolved_version
+          end
+        end
+        project.save
+        UI.success("[release] MARKETING_VERSION 已写入 pbxproj = #{resolved_version}")
+      else
+        UI.message("[release] MARKETING_VERSION 已经是 #{resolved_version}，无需同步")
+      end
+    end
 
     metadata_dir    = File.expand_path('metadata', __dir__)
     screenshots_dir = File.expand_path('screenshots', __dir__)
@@ -254,6 +284,7 @@ platform :ios do
     rating_config_path = File.expand_path('metadata/itunes_rating_config.json', __dir__)
     upload_to_app_store(
       app_identifier: APP_IDENTIFIER,
+      app_version: resolved_version,    # 显式指定，避免 deliver 误用本地旧版本号
       skip_binary_upload: true,       # 二进制已由 upload_to_testflight 传好
       skip_metadata: skip_metadata,
       skip_screenshots: skip_screenshots,
@@ -306,21 +337,81 @@ platform :ios do
     File.exist?(path) ? File.read(path).strip : 'New release'
   end
 
+  # 拉取 ASC 上某 App 的全部 iOS 历史版本（任何状态，含已发布/被拒/已替换）。
+  # 用来计算下一个可用 versionString，避免命中 "previously used" 409。
+  def asc_ios_versions(app)
+    versions = app.get_app_store_versions(filter: { platform: 'IOS' }) || []
+    versions.each do |v|
+      UI.message("[asc] iOS version=#{v.version_string} state=#{v.app_store_state}")
+    end
+    versions
+  end
+
+  # 计算下一个 iOS 版本号 = max(ASC 全部历史版本, 本地 MARKETING_VERSION) patch+1。
+  # 没有 patch 段时补 0 再 +1（1.0 → 1.0.1，2 → 2.0.1）。
+  def asc_next_version(app, local_version: nil)
+    versions = asc_ios_versions(app)
+    asc_max = versions
+              .map { |v| (Gem::Version.new(v.version_string) rescue nil) }
+              .compact.max
+    local_max = (Gem::Version.new(local_version) rescue nil) if local_version && !local_version.empty?
+    base = [asc_max, local_max].compact.max || Gem::Version.new('1.0.0')
+
+    parts = base.to_s.split('.').map(&:to_i)
+    parts << 0 while parts.size < 3
+    parts[-1] += 1
+    next_ver = parts.join('.')
+    UI.message("[asc_next_version] asc_max=#{asc_max} local=#{local_version} base=#{base} → next=#{next_ver}")
+    next_ver
+  end
+
   # 确保 App 有一个可编辑的草稿版本（PREPARE_FOR_SUBMISSION 等状态）。
   # 全新 App 上传 metadata/截图前必须先有 Version，否则 deliver 会在
   # fetch_app_store_review_detail 上崩 "No data"。幂等：已有草稿则跳过。
+  # 返回最终敲定的 version_string（用于后续把 IPA 的 MARKETING_VERSION 同步过去）。
   def ensure_draft_version(app, version: '1.0')
     editable = app.get_edit_app_store_version(platform: Spaceship::ConnectAPI::Platform::IOS)
     if editable
       UI.success("已有可编辑版本:v#{editable.version_string} (#{editable.app_store_state})")
     else
-      UI.message("App 无可编辑版本 → 创建 v#{version} 草稿…")
-      editable = Spaceship::ConnectAPI::AppStoreVersion.create(
-        app_id: app.id,
-        version_string: version,
-        platform: Spaceship::ConnectAPI::Platform::IOS
-      )
-      UI.success("已创建草稿版本：v#{editable.version_string} (id=#{editable.id})")
+      # 不直接用本地 MARKETING_VERSION（很可能已被 ASC 用过），
+      # 而是查 ASC 全部历史版本，patch+1 算下一个可用号。
+      target_version = asc_next_version(app, local_version: version)
+      if target_version != version
+        UI.important("本地 MARKETING_VERSION=#{version} 已被 ASC 用过 → 自动 bump 到 v#{target_version}")
+      end
+      UI.message("App 无可编辑版本 → 创建 v#{target_version} 草稿…")
+      # 注意：fastlane 2.234 已移除 AppStoreVersion.create 类方法，
+      # 必须走模块级的 post_app_store_version，并用 attributes 哈希（camelCase 键）。
+      begin
+        resp = Spaceship::ConnectAPI.post_app_store_version(
+          app_id: app.id,
+          attributes: {
+            versionString: target_version,
+            platform: Spaceship::ConnectAPI::Platform::IOS
+          }
+        )
+        editable = resp.to_models.first
+        UI.success("已创建草稿版本：v#{editable.version_string} (id=#{editable.id})")
+      rescue Spaceship::UnexpectedResponse => e
+        # 极端情况：刚算出来的版本号在我们 GET 与 POST 之间又被别的 workflow 占用。
+        # 再算一次并重试一次。
+        if e.message.include?('previously used') || e.message.include?('409')
+          retry_version = asc_next_version(app, local_version: target_version)
+          UI.important("v#{target_version} 也已被占用 → 重试 v#{retry_version}")
+          resp = Spaceship::ConnectAPI.post_app_store_version(
+            app_id: app.id,
+            attributes: {
+              versionString: retry_version,
+              platform: Spaceship::ConnectAPI::Platform::IOS
+            }
+          )
+          editable = resp.to_models.first
+          UI.success("已创建草稿版本：v#{editable.version_string} (id=#{editable.id})")
+        else
+          raise
+        end
+      end
     end
 
     # deliver 的 review_attachment_file 会无条件 fetch AppStoreReviewDetail，
@@ -341,7 +432,7 @@ platform :ios do
       UI.success("已创建 Review Detail 占位")
     end
 
-    editable
+    editable.version_string
   end
 
   # 将 App Price 设为 Free (tier 0),并把 App Privacy (数据使用声明)

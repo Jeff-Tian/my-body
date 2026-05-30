@@ -634,10 +634,26 @@ screenshots_if_stale:
 	fi; \
 	printf "$(GREEN)[screenshots_if_stale] ✅ 截图新鲜 (最新 $${age_hr}h 前)，跳过重拍$(NC)\n"
 
-## release: 一键发版 → 按需生成截图 → 构建 IPA → 上传二进制 + 元数据 + 截图 → 提审 → 自动发布
+## releasenotes: 从 CHANGELOG.md 生成本地化 release_notes(供 Fastlane 上传)
+.PHONY: releasenotes
+releasenotes:
+	@set -euo pipefail; \
+	if [ ! -f scripts/generate_release_notes.rb ]; then echo "scripts/generate_release_notes.rb 不存在"; exit 70; fi; \
+	ruby scripts/generate_release_notes.rb
+
+## auto-releasenotes: 从 git commits 自动生成双语 release notes 并更新 CHANGELOG + fastlane
+##   可选参数:VERSION=x.y.z  DRY_RUN=1  ARGS="--since=<sha>" 或 ARGS="--count=N"  ARGS=--no-ai
+##   需要 GITHUB_TOKEN 或已登录 gh CLI(用于 GitHub Models 概括);否则回退到原始 commits。
+.PHONY: auto-releasenotes
+auto-releasenotes:
+	@set -euo pipefail; \
+	ruby scripts/auto_release_notes.rb $(ARGS)
+
+## release: 一键发版 → 自动生成 release notes → 按需生成截图 → 构建 IPA → 上传 → 提审 → 自动发布
 ##   FORCE_SNAPSHOT=1      强制重拍截图
 ##   SKIP_SNAPSHOT=1       无条件跳过截图
 ##   SNAPSHOT_MAX_AGE=24   截图新鲜度阈值(小时)
+##   SKIP_RELEASE_NOTES=1  跳过自动生成 release notes(沿用 fastlane/metadata 里的现有文件)
 ##   SKIP_BINARY=1         不构建 / 不上传二进制(仅推文案 + 截图,不能提审)
 ##   SKIP_METADATA=1       不上传 App 文案
 ##   SKIP_SCREENSHOTS=1    不上传截图
@@ -645,20 +661,39 @@ screenshots_if_stale:
 ##   MANUAL_RELEASE=1      审核通过后不自动发布,改为手动发布
 .PHONY: release
 release: check_asc_env check_app_exists update_fastlane gen
-	@printf "$(GREEN)==> [1/3] 检查 / 生成 App Store 截图$(NC)\n"
+	@printf "$(GREEN)==> [1/4] 自动生成 release notes (从 git commits)$(NC)\n"
+	@RN_FILE=fastlane/metadata/zh-Hans/release_notes.txt; \
+	if [ "$${SKIP_RELEASE_NOTES:-0}" = "1" ]; then \
+		printf "$(YELLOW)[release] 跳过 release notes 生成 (SKIP_RELEASE_NOTES=1)$(NC)\n"; \
+	elif [ "$${FORCE_RELEASE_NOTES:-0}" != "1" ] && [ -s "$$RN_FILE" ]; then \
+		printf "$(YELLOW)[release] 已存在 release notes($$RN_FILE,$$(wc -c <"$$RN_FILE") bytes),跳过自动生成。$(NC)\n"; \
+		printf "$(YELLOW)         如需强制重新生成:FORCE_RELEASE_NOTES=1 make release$(NC)\n"; \
+	else \
+		ruby scripts/auto_release_notes.rb || printf "$(YELLOW)[release] release notes 生成失败,继续使用 fastlane/metadata 里的现有文件$(NC)\n"; \
+	fi
+	@printf "$(GREEN)==> [2/4] 检查 / 生成 App Store 截图$(NC)\n"
 	@$(MAKE) screenshots_if_stale
-	@printf "$(GREEN)==> [2/3] bundle install(首次会安装 fastlane)$(NC)\n"
+	@printf "$(GREEN)==> [3/4] bundle install(首次会安装 fastlane)$(NC)\n"
 	@if [ ! -f Gemfile.lock ]; then bundle install; fi
-	@printf "$(GREEN)==> [3/3] fastlane release:构建 → 上传 → 提审 → 发布$(NC)\n"
+	@printf "$(GREEN)==> [4/4] fastlane release:构建 → 上传 → 提审 → 发布$(NC)\n"
 	@bundle exec fastlane release
 	@printf "$(GREEN)🎉 发版流程已全部提交,审核通过后将按设置自动发布。$(NC)\n"
 
 ## release_metadata_only: 仅上传元数据 + 截图,不构建 / 不提审(等同旧版 release 行为)
 .PHONY: release_metadata_only
 release_metadata_only: check_asc_env check_app_exists update_fastlane
-	@printf "$(GREEN)==> [1/2] 检查 / 生成 App Store 截图$(NC)\n"
+	@printf "$(GREEN)==> [1/3] 自动生成 release notes (从 git commits)$(NC)\n"
+	@RN_FILE=fastlane/metadata/zh-Hans/release_notes.txt; \
+	if [ "$${SKIP_RELEASE_NOTES:-0}" = "1" ]; then \
+		printf "$(YELLOW)[release_metadata_only] 跳过 release notes 生成 (SKIP_RELEASE_NOTES=1)$(NC)\n"; \
+	elif [ "$${FORCE_RELEASE_NOTES:-0}" != "1" ] && [ -s "$$RN_FILE" ]; then \
+		printf "$(YELLOW)[release_metadata_only] 已存在 release notes($$RN_FILE,$$(wc -c <"$$RN_FILE") bytes),跳过自动生成。FORCE_RELEASE_NOTES=1 可强制重生成。$(NC)\n"; \
+	else \
+		ruby scripts/auto_release_notes.rb || printf "$(YELLOW)[release_metadata_only] release notes 生成失败,继续$(NC)\n"; \
+	fi
+	@printf "$(GREEN)==> [2/3] 检查 / 生成 App Store 截图$(NC)\n"
 	@$(MAKE) screenshots_if_stale
-	@printf "$(GREEN)==> [2/2] 上传元数据 + 截图到 App Store Connect$(NC)\n"
+	@printf "$(GREEN)==> [3/3] 上传元数据 + 截图到 App Store Connect$(NC)\n"
 	@$(MAKE) push_metadata
 	@printf "$(GREEN)✅ 仅元数据 + 截图已推送。如需完整发版:make release$(NC)\n"
 
