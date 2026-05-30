@@ -265,14 +265,13 @@ struct DetailView: View {
 struct FullPhotoView: View {
     @Environment(\.dismiss) private var dismiss
     let photoData: Data?
+
     var body: some View {
         ZStack(alignment: .topTrailing) {
             Color.black.ignoresSafeArea()
 
             if let data = photoData, let uiImage = UIImage(data: data) {
-                Image(uiImage: uiImage)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
+                ZoomablePhoto(uiImage: uiImage)
             }
 
             Button {
@@ -283,7 +282,125 @@ struct FullPhotoView: View {
                     .foregroundColor(.white)
                     .padding()
             }
+            .accessibilityLabel("关闭")
         }
+    }
+}
+
+/// 支持双指捏合缩放、双击切换、放大后拖动平移（带边界约束）的图片查看器。
+private struct ZoomablePhoto: View {
+    let uiImage: UIImage
+
+    private let minScale: CGFloat = 1.0
+    private let maxScale: CGFloat = 4.0
+    private let doubleTapScale: CGFloat = 2.5
+
+    // 已提交的状态（手势结束后落定）
+    @State private var scale: CGFloat = 1.0
+    @State private var offset: CGSize = .zero
+    // 手势进行中的增量
+    @GestureState private var gestureScale: CGFloat = 1.0
+    @GestureState private var gestureOffset: CGSize = .zero
+
+    var body: some View {
+        GeometryReader { geo in
+            let containerSize = geo.size
+            let fitted = fittedSize(in: containerSize)
+            let effectiveScale = scale * gestureScale
+            // 拖动中的原始偏移（未 clamp，给实时跟手）；松手时再 clamp
+            let liveOffset = CGSize(
+                width: offset.width + gestureOffset.width,
+                height: offset.height + gestureOffset.height
+            )
+
+            Image(uiImage: uiImage)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(width: containerSize.width, height: containerSize.height)
+                .scaleEffect(effectiveScale)
+                .offset(liveOffset)
+                .gesture(
+                    MagnificationGesture()
+                        .updating($gestureScale) { value, state, _ in
+                            state = value
+                        }
+                        .onEnded { value in
+                            let newScale = scale * value
+                            withAnimation(.interactiveSpring(response: 0.3, dampingFraction: 0.8)) {
+                                scale = min(max(newScale, minScale), maxScale)
+                                if scale <= minScale {
+                                    scale = minScale
+                                    offset = .zero
+                                } else {
+                                    offset = clampedOffset(offset, scale: scale, fitted: fitted, container: containerSize)
+                                }
+                            }
+                        }
+                )
+                .simultaneousGesture(
+                    DragGesture()
+                        .updating($gestureOffset) { value, state, _ in
+                            // 仅在已放大时允许平移
+                            if scale > minScale {
+                                state = value.translation
+                            }
+                        }
+                        .onEnded { value in
+                            guard scale > minScale else { return }
+                            let proposed = CGSize(
+                                width: offset.width + value.translation.width,
+                                height: offset.height + value.translation.height
+                            )
+                            withAnimation(.interactiveSpring(response: 0.3, dampingFraction: 0.85)) {
+                                offset = clampedOffset(proposed, scale: scale, fitted: fitted, container: containerSize)
+                            }
+                        }
+                )
+                .onTapGesture(count: 2) {
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                        if scale > minScale {
+                            scale = minScale
+                            offset = .zero
+                        } else {
+                            scale = doubleTapScale
+                            offset = .zero
+                        }
+                    }
+                }
+                .accessibilityLabel("报告照片")
+                .accessibilityHint("双指捏合缩放，双击放大或还原")
+        }
+    }
+
+    /// 在容器内按 .fit 计算图片实际显示尺寸（缩放前）。
+    private func fittedSize(in container: CGSize) -> CGSize {
+        guard uiImage.size.width > 0, uiImage.size.height > 0,
+              container.width > 0, container.height > 0 else {
+            return container
+        }
+        let imageAspect = uiImage.size.width / uiImage.size.height
+        let containerAspect = container.width / container.height
+        if imageAspect > containerAspect {
+            // 受宽度约束
+            let w = container.width
+            return CGSize(width: w, height: w / imageAspect)
+        } else {
+            // 受高度约束
+            let h = container.height
+            return CGSize(width: h * imageAspect, height: h)
+        }
+    }
+
+    /// 根据当前缩放后的图片尺寸与容器尺寸，约束平移偏移，避免图片被拖出可视区域。
+    private func clampedOffset(_ proposed: CGSize, scale: CGFloat, fitted: CGSize, container: CGSize) -> CGSize {
+        let scaledWidth = fitted.width * scale
+        let scaledHeight = fitted.height * scale
+        let maxX = max(0, (scaledWidth - container.width) / 2)
+        let maxY = max(0, (scaledHeight - container.height) / 2)
+        return CGSize(
+            width: min(max(proposed.width, -maxX), maxX),
+            height: min(max(proposed.height, -maxY), maxY)
+        )
     }
 }
 
