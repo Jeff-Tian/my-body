@@ -524,3 +524,8 @@ protocol HealthKitWriting {
 **What:** 在 `MyBody/Views/Detail/DetailView.swift` 的 `FullPhotoView` 中加入双指捏合缩放(1x–4x)、双击切换(1x↔2.5x)、放大后拖动平移(带边界 clamp，超界回弹/小于1x归位)。图片逻辑抽到 private `ZoomablePhoto`，保留原有关闭按钮。
 **Why:** 报告照片需要放大查看 InBody 细节数字，原查看器只能 .fit 静态显示。
 **Scope note:** `FullPhotoView` 为 DetailView 与 EditRecordView 共用组件，本次改动同时惠及两处看图入口。`make build` 通过。
+
+### 2026-05-30: 修复 ZoomablePhoto 缩放/平移松手闪烁
+**By:** Lambert (iOS UI Developer)
+**What:** 在 `DetailView.swift` 的 `ZoomablePhoto` 中，MagnificationGesture 与 DragGesture 的 `.onEnded` 改为「先无动画连续落定、再动画修正越界」：先把提交态(scale/offset)无动画接管手势末值，仅越界时才 `withAnimation` clamp 回合法范围。
+**Why:** `@GestureState` 在手势结束会无动画瞬间回弹到默认值，与 `withAnimation` 提交 scale 冲突，导致 effectiveScale 先掉回 1x 再动画放大的闪烁。此模式可消除闪烁，同时保留双击、边界 clamp、可访问性。`make build` 通过。

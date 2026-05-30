@@ -392,18 +392,27 @@ final class ScanViewModel {
         context: ModelContext,
         ocrService: OCRService = OCRService()
     ) async throws -> OCRService.ParsedReport {
-        guard let assetId = record.photoAssetIdentifier, !assetId.isEmpty else {
+        // 解析原图来源：优先用随记录持久化的 `photoData`（始终本地、不依赖相册/权限/iCloud），
+        // 仅当没有 photoData 时才回退到通过 `photoAssetIdentifier` 重新从相册抓取 PHAsset。
+        // 这样在"受限相册访问/单张 Data 导入"（assetIdentifier 为 nil）等场景下也能重新识别。
+        let image: UIImage
+        var resolvedAsset: PHAsset?
+
+        if let data = record.photoData, let stored = UIImage(data: data) {
+            image = stored
+        } else if let assetId = record.photoAssetIdentifier, !assetId.isEmpty {
+            let fetch = PHAsset.fetchAssets(withLocalIdentifiers: [assetId], options: nil)
+            guard let asset = fetch.firstObject else {
+                throw ReparseError.photoNotInAlbum
+            }
+            let photoService = PhotoScanService()
+            guard let loaded = await photoService.loadFullImage(for: asset) else {
+                throw ReparseError.imageLoadFailed
+            }
+            image = loaded
+            resolvedAsset = asset
+        } else {
             throw ReparseError.noOriginalPhoto
-        }
-
-        let fetch = PHAsset.fetchAssets(withLocalIdentifiers: [assetId], options: nil)
-        guard let asset = fetch.firstObject else {
-            throw ReparseError.photoNotInAlbum
-        }
-
-        let photoService = PhotoScanService()
-        guard let image = await photoService.loadFullImage(for: asset) else {
-            throw ReparseError.imageLoadFailed
         }
 
         // 把已登记的 OCR 纠正读进内存快照，避免在后台线程触碰 SwiftData。
@@ -443,9 +452,9 @@ final class ScanViewModel {
             }
         }
 
-        // scanDate 若解析未拿到，回退到 PHAsset.creationDate；再不行保留原值。
+        // scanDate 若解析未拿到，回退到 PHAsset.creationDate（仅当走了相册抓取路径）；再不行保留原值。
         if parsed.scanDate == nil {
-            parsed.scanDate = asset.creationDate ?? record.scanDate
+            parsed.scanDate = resolvedAsset?.creationDate ?? record.scanDate
         }
 
         // 就地覆盖记录的数值字段 + OCR 原始文本溯源。

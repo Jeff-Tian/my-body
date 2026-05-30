@@ -14,6 +14,13 @@ struct DetailView: View {
     @State private var reparseError: String?
     @State private var showReparseSuccess = false
 
+    /// 是否具备「重新识别」所需的原图来源：
+    /// 优先看随记录持久化的 `photoData`（始终本地），其次看相册标识 `photoAssetIdentifier`。
+    /// 只要任一存在即可重新识别 —— 与 `ScanViewModel.reparseExistingReport` 的取图顺序保持一致。
+    private var canReparse: Bool {
+        record.photoData != nil || (record.photoAssetIdentifier?.isEmpty == false)
+    }
+
     var body: some View {
         ZStack {
             scrollContent
@@ -32,7 +39,7 @@ struct DetailView: View {
                     Image(systemName: "arrow.triangle.2.circlepath")
                 }
                 .accessibilityLabel("重新识别")
-                .disabled(record.photoAssetIdentifier == nil || isReparsing)
+                .disabled(!canReparse || isReparsing)
                 Button { showEditSheet = true } label: {
                     Image(systemName: "pencil")
                 }
@@ -99,6 +106,15 @@ struct DetailView: View {
                             .frame(maxHeight: 200)
                             .clipShape(RoundedRectangle(cornerRadius: 12))
                     }
+                }
+
+                // 当既无原图也无相册标识时，「重新识别」按钮会被禁用 —— 说明原因，避免“灰着没反应”。
+                if !canReparse {
+                    Label("该报告未保存原始照片，无法重新识别。可改用“编辑”手动修正数值。", systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
                 // Score
@@ -184,7 +200,7 @@ struct DetailView: View {
     }
 
     private func reparse() async {
-        guard record.photoAssetIdentifier != nil else { return }
+        guard canReparse else { return }
         isReparsing = true
         defer { isReparsing = false }
         do {

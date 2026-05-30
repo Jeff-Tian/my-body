@@ -9,14 +9,6 @@
 
 <!-- Append new learnings below. Each entry is something lasting about the project. -->
 
-### 2026-05-30 — 「重新识别」grey on device: gate `photoData`, not `photoAssetIdentifier`
-- `InBodyRecord` persists BOTH `photoData` (`@Attribute(.externalStorage)`, always local) and `photoAssetIdentifier` (relative PHAsset id, often nil). For re-recognition the **reliable source is `photoData`**, not the PHAsset.
-- Single-photo Data-fallback imports (limited photo access — the real-device norm) save `photoAssetIdentifier = nil` but DO keep `photoData`. Gating the re-recognize button on `photoAssetIdentifier == nil` therefore greys it out wrongly on device.
-- Fix: `ScanViewModel.reparseExistingReport` now prefers `photoData`, falls back to PHAsset only when absent; `DetailView` gate/guard use `canReparse = photoData != nil || assetIdentifier non-empty`; added a disabled-reason caption + EN string so the button is never "grey with no reason."
-- Whenever a feature needs the original photo, prefer persisted `photoData` over re-fetching the PHAsset (avoids permission/iCloud/deleted-asset failures).
-- The OCR-overwrite body of `reparseExistingReport` is Ash's domain — flagged in `.squad/decisions/inbox/lambert-rerecognize-disabled.md`.
-
-
 ### 2026-05-24 — 全屏看图缩放/平移手势（FullPhotoView → ZoomablePhoto）
 - **共用组件：** `FullPhotoView`（`MyBody/Views/Detail/DetailView.swift` ~265 行）被 DetailView 和 EditRecordView 共用，改一处覆盖两处。把图片逻辑抽到 private `ZoomablePhoto`，`FullPhotoView` 只保留黑底 + 关闭按钮。
 - **手势组合：** `MagnificationGesture` 用 `@GestureState gestureScale` 实时跟手、`.onEnded` 落定到 `@State scale` 并 clamp 到 [1,4]；`DragGesture` 用 `@GestureState gestureOffset`，`.simultaneousGesture` 与缩放并存，仅当 `scale > 1` 才允许平移；双击 `.onTapGesture(count: 2)` 在 1x↔2.5x 间 `withAnimation` 切换。提交态(scale/offset)与手势增量态分离是关键，避免手势结束闪跳。

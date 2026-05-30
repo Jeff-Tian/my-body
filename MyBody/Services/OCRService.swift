@@ -106,6 +106,21 @@ final class OCRService: Sendable {
 
     private func runRecognition(on cgImage: CGImage) throws -> [TextBox] {
         let request = VNRecognizeTextRequest()
+
+        // ── 跨设备确定性:固定 Vision 文字识别模型版本 ──────────────────────
+        // ⚠️ 不固定 revision 时,Vision 会在每台设备上选用当前 iOS 能提供的
+        // **最新**模型版本。不同 iPhone(不同 iOS 版本)因此会用不同的
+        // text-recognition 模型,对同一张报告产生不同的 box 切分/几何/阅读顺序。
+        // 下游字段解析完全依赖 box 几何与文本,所以这会直接导致"同一张报告在
+        // A 手机识别成 68.1kg、在 B 手机识别成 60.0kg(且体脂肪 100kg)"这类
+        // 设备相关的串字段 bug。固定到 revision 3(iOS 16+ 提供,本 App 最低
+        // iOS 17)即可让 OCR 在所有设备上确定一致。若该 revision 在某设备上
+        // 不可用(理论上不会发生),则不设置,退回系统默认。
+        let pinnedRevision = VNRecognizeTextRequestRevision3
+        if VNRecognizeTextRequest.supportedRevisions.contains(pinnedRevision) {
+            request.revision = pinnedRevision
+        }
+
         request.recognitionLevel = .accurate
         request.recognitionLanguages = ["zh-Hans", "en-US"]
         request.usesLanguageCorrection = true
@@ -289,7 +304,45 @@ final class OCRService: Sendable {
         report.segFatLeftLeg  = segFat.leftLeg
         report.segFatRightLeg = segFat.rightLeg
 
+        // 跨字段物理合理性校验:丢弃明显不可能的串字段值(例如体脂肪 ≥ 体重)。
+        applyCrossFieldValidation(&report)
+
         return report
+    }
+
+    /// 跨字段物理合理性校验(防 OCR 串字段写入脏数据)。
+    ///
+    /// 每个字段的 `expected` 只是**单字段**硬区间,无法识别"单看在区间内、
+    /// 但相对体重不可能"的值 —— 例如跨设备误读出的 `体脂肪 100.0 kg` 对
+    /// `体重 60.0 kg`(60kg 的身体不可能有 100kg 脂肪)。该值能通过
+    /// `bodyFatMass.expected`(1...100),但物理上是垃圾。
+    ///
+    /// 规则:所有质量分量(骨骼肌、体脂肪、身体水分、去脂体重)都必须**小于
+    /// 体重**。2% 容差吸收 OCR 取整 / 去脂体重接近体重的情形。任一违规者
+    /// 直接置 nil 并记入 `failedFields`、从 `rawTexts` 移除 —— UI 会显示
+    /// "未识别"(提示重扫 / 手动输入),而不是把脏值存库再写进 HealthKit。
+    ///
+    /// 仅在 `weight` 自身解析成功时运行:没有可信的体重锚点就无法判断分量,
+    /// 此时保持原样不动。
+    private func applyCrossFieldValidation(_ report: inout ParsedReport) {
+        guard let weight = report.weight, weight > 0 else { return }
+        // 分量不得超过体重(+2% OCR 容差)。
+        let ceiling = weight * 1.02
+
+        func reject(_ value: Double?, field: String) -> Double? {
+            guard let v = value else { return nil }
+            if v >= ceiling {
+                report.failedFields.insert(field)
+                report.rawTexts.removeValue(forKey: field)
+                return nil
+            }
+            return value
+        }
+
+        report.skeletalMuscle = reject(report.skeletalMuscle, field: "skeletalMuscle")
+        report.bodyFatMass    = reject(report.bodyFatMass,    field: "bodyFatMass")
+        report.totalBodyWater = reject(report.totalBodyWater, field: "totalBodyWater")
+        report.leanBodyMass   = reject(report.leanBodyMass,   field: "leanBodyMass")
     }
 
     /// 从 InBody 230 "运动处方" 段落抽取"基础体重"印刷数值。

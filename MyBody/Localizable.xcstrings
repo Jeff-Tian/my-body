@@ -1,6 +1,11 @@
 {
   "sourceLanguage" : "zh-Hans",
   "strings" : {
+    "该报告未保存原始照片，无法重新识别。可改用“编辑”手动修正数值。" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "This report has no saved original photo, so it can't be re-recognized. Use Edit to correct the values manually." } }
+      }
+    },
     "写入健康" : {
       "localizations" : {
         "en" : { "stringUnit" : { "state" : "translated", "value" : "Write to Health" } }

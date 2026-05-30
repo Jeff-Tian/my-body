@@ -115,3 +115,17 @@ Ripley arbitration GO. Extracted minimal testable seam so Parker's 6 `XCTSkip`'d
 
 ### 2026-05-24: Phase 2.5 complete — HealthKitWriting protocol seam shipped
 Extracted protocol + lifted `partitionForWrite` to static + created `FakeHealthKitWriter`. Build green. Parker activated all 6 XCTSkip tests against the fake → 18/0/0. Source not yet committed (Jeff manual). Drift note: fake records bulk `[InBodyRecord]` call args, not per-sample HKQuantitySample saves; HK metadata invariants deferred to integration tests.
+
+### 2026-05-25: Cross-device OCR misread — root cause was UNPINNED Vision revision
+
+Same printed InBody 230 report photographed on two iPhones: device A read 体重 68.1 kg correctly; device B read 60.0 kg + 体脂肪 100.0 kg (impossible) + 身体水分 23.8 kg. Not a digit drop — a device-dependent field-association divergence.
+
+- **ROOT CAUSE — `VNRecognizeTextRequest.revision` was never set.** Vision selects the NEWEST model revision available on each device's iOS version. Two phones on different iOS builds → different text-recognition models → different box segmentation / geometry / reading order for the identical photo. Our whole parser (`parseBoxes`/`findValue`) is geometry+text dependent, so divergent boxes cascade into divergent field associations. This fully explains "68.1 on A, 60.0+garbage on B." **Fix:** pin `request.revision = VNRecognizeTextRequestRevision3` (iOS 16+; app min iOS 17 so always available) guarded by `supportedRevisions.contains(...)`. OCR is now deterministic across devices. THIS is the cross-device fix.
+
+- **SECONDARY — no cross-field numeric validation.** Per-field `expected` ranges are single-field hard bounds only. `bodyFatMass.expected = 1...100` literally let `100.0 kg` through; nothing checked a mass component must be < body weight. **Fix:** new `applyCrossFieldValidation(&report)` — every mass component (skeletalMuscle/bodyFatMass/totalBodyWater/leanBodyMass) must be < weight × 1.02; violators drop to nil + go to `failedFields` + stripped from `rawTexts`, so the UI shows "未识别" instead of persisting garbage into HealthKit. Only runs when `weight` parsed (need a trusted anchor). Existing fixture (68.1/31.7/12.0/41.2/56.1) all pass the ceiling.
+
+- **Lesson — determinism before heuristics.** We spent a whole prior session tuning scoring weights (Patterns A–F) on ONE device's box layout. Those heuristics are only as stable as the boxes feeding them; an unpinned Vision revision silently invalidates all of it on a different phone. Pin the model FIRST, then tune. Any future OCR heuristic work must assume revision is pinned.
+
+- **Deferred to Ripley — layout fingerprint / coordinate-anchor (roadmap Phase 4).** The parser remains geometry-fragile even with a pinned revision (rowTol/competitorRight/scoring all sensitive to box jitter). The durable answer is an InBody-230 layout template anchoring values to normalized coordinate regions. Flagged, not implemented this session.
+
+- **Files:** `MyBody/Services/OCRService.swift` — `runRecognition` (revision pin) + new `applyCrossFieldValidation` (called at end of `parseBoxes`). `make build` ✅.
