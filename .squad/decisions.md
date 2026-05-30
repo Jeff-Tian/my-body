@@ -518,3 +518,9 @@ protocol HealthKitWriting {
 **Where applied:** `MyBody/Views/Trends/WeightHealthWriteSheet.swift` (`pendingResult` + `pendingError: ErrorInfo?`), `MyBody/Views/Trends/TrendsView.swift` (alert bindings on `WeightHealthWriteOverlay`).
 
 **Watch for this in:** Any future view combining (a) state-machine VM (`@Observable` controller with enum-driven `phase`), (b) `.overlay`/`.sheet`/`confirmationDialog` reading from that state, (c) `.alert(...presenting:)` whose value also reads from that state. Apply the same dedicated-optional pattern before shipping.
+
+### 2026-05-30: 全屏看图加入缩放/平移交互
+**By:** Lambert (iOS UI Developer), requested by Jeff Tian
+**What:** 在 `MyBody/Views/Detail/DetailView.swift` 的 `FullPhotoView` 中加入双指捏合缩放(1x–4x)、双击切换(1x↔2.5x)、放大后拖动平移(带边界 clamp，超界回弹/小于1x归位)。图片逻辑抽到 private `ZoomablePhoto`，保留原有关闭按钮。
+**Why:** 报告照片需要放大查看 InBody 细节数字，原查看器只能 .fit 静态显示。
+**Scope note:** `FullPhotoView` 为 DetailView 与 EditRecordView 共用组件，本次改动同时惠及两处看图入口。`make build` 通过。

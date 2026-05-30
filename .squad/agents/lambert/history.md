@@ -9,6 +9,13 @@
 
 <!-- Append new learnings below. Each entry is something lasting about the project. -->
 
+### 2026-05-24 — 全屏看图缩放/平移手势（FullPhotoView → ZoomablePhoto）
+- **共用组件：** `FullPhotoView`（`MyBody/Views/Detail/DetailView.swift` ~265 行）被 DetailView 和 EditRecordView 共用，改一处覆盖两处。把图片逻辑抽到 private `ZoomablePhoto`，`FullPhotoView` 只保留黑底 + 关闭按钮。
+- **手势组合：** `MagnificationGesture` 用 `@GestureState gestureScale` 实时跟手、`.onEnded` 落定到 `@State scale` 并 clamp 到 [1,4]；`DragGesture` 用 `@GestureState gestureOffset`，`.simultaneousGesture` 与缩放并存，仅当 `scale > 1` 才允许平移；双击 `.onTapGesture(count: 2)` 在 1x↔2.5x 间 `withAnimation` 切换。提交态(scale/offset)与手势增量态分离是关键，避免手势结束闪跳。
+- **平移边界 clamp：** 用 `GeometryReader` 拿容器尺寸，先按 `.fit` 算出缩放前的 `fittedSize`（比较 imageAspect vs containerAspect 决定受宽/高约束），再 `scaledSize = fitted * scale`，`maxX = max(0,(scaledW-containerW)/2)`，offset 双向 clamp 到 ±maxX/±maxY。松手时才 clamp（`liveOffset` 拖动中不 clamp 保证跟手）。
+- **回弹：** `.onEnded` 里若 `scale <= 1` 强制归 1 且 offset 清零；缩放/平移落定统一用 `.interactiveSpring`，双击用 `.spring`，回弹平滑。dismiss 时 `@State` 自然销毁无需手动重置。
+- **无障碍：** 给 Image 加 `accessibilityLabel("报告照片")` + `accessibilityHint(...)`，关闭按钮加 `accessibilityLabel("关闭")`；手势不破坏 VoiceOver。
+
 ### 2026-05-24 — Single-photo import (HomeView FAB Menu)
 - **PhotosPicker + PHAsset dedup:** When `PhotosPicker(photoLibrary: .shared())` is used, the resulting `PhotosPickerItem.itemIdentifier` returns the PHAsset `localIdentifier`. This lets us reuse the existing batch-scan pipeline (which dedups on `photoAssetIdentifier`) for picker-selected photos — no schema change required.
 - **Menu-based FAB pattern:** When adding an alternative entry point to an existing primary action, prefer `Menu` over a confirmation dialog. The FAB label stays the same ("导入报告"), and tapping reveals two options ("扫描相册" / "选择单张照片"). Discoverable, system-native, doesn't break muscle memory.
