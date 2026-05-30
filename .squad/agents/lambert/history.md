@@ -13,6 +13,12 @@
 - **共用组件：** `FullPhotoView`（`MyBody/Views/Detail/DetailView.swift` ~265 行）被 DetailView 和 EditRecordView 共用，改一处覆盖两处。把图片逻辑抽到 private `ZoomablePhoto`，`FullPhotoView` 只保留黑底 + 关闭按钮。
 - **手势组合：** `MagnificationGesture` 用 `@GestureState gestureScale` 实时跟手、`.onEnded` 落定到 `@State scale` 并 clamp 到 [1,4]；`DragGesture` 用 `@GestureState gestureOffset`，`.simultaneousGesture` 与缩放并存，仅当 `scale > 1` 才允许平移；双击 `.onTapGesture(count: 2)` 在 1x↔2.5x 间 `withAnimation` 切换。提交态(scale/offset)与手势增量态分离是关键，避免手势结束闪跳。
 - **平移边界 clamp：** 用 `GeometryReader` 拿容器尺寸，先按 `.fit` 算出缩放前的 `fittedSize`（比较 imageAspect vs containerAspect 决定受宽/高约束），再 `scaledSize = fitted * scale`，`maxX = max(0,(scaledW-containerW)/2)`，offset 双向 clamp 到 ±maxX/±maxY。松手时才 clamp（`liveOffset` 拖动中不 clamp 保证跟手）。
+
+### 2026-05-30 — 修复缩放/平移松手闪烁（@GestureState 回弹 vs withAnimation 提交冲突）
+- **现象：** 双指张开放大，松手瞬间图片先「瞬间还原」缩回 1x、再动画放大到松开时的倍率；最终倍率正确但闪一下。
+- **根因：** `@GestureState`（gestureScale/gestureOffset）在 `.onEnded` 会**无动画瞬间回弹**到默认值。若把 `scale` 包在 `withAnimation` 里提交，`scale` 慢慢 1→2 而 `gestureScale` 瞬间 2→1，`effectiveScale = scale*gestureScale` 先掉到 1x 再爬回——这就是闪烁。
+- **修复模式「先无动画连续落定、再动画修正越界」：** `.onEnded` 里**先无动画**把提交态接管手势末值（`scale = scale*value` / `offset = proposed`），让 effective 值在松手瞬间保持连续；**仅当越界**时才 `withAnimation` 把它 clamp 回合法范围。MagnificationGesture 和 DragGesture 两个 `.onEnded` 都要这样处理。
+- **保留不动：** 双击 1x↔2.5x、关闭按钮、边界 clamp 辅助函数、可访问性 label/hint。`make build` 通过。
 - **回弹：** `.onEnded` 里若 `scale <= 1` 强制归 1 且 offset 清零；缩放/平移落定统一用 `.interactiveSpring`，双击用 `.spring`，回弹平滑。dismiss 时 `@State` 自然销毁无需手动重置。
 - **无障碍：** 给 Image 加 `accessibilityLabel("报告照片")` + `accessibilityHint(...)`，关闭按钮加 `accessibilityLabel("关闭")`；手势不破坏 VoiceOver。
 

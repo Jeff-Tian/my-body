@@ -325,14 +325,29 @@ private struct ZoomablePhoto: View {
                             state = value
                         }
                         .onEnded { value in
+                            // 松手瞬间的 effectiveScale = scale * value。
+                            // 先无动画把 scale 接管这个连续值：gestureScale 会瞬间回弹到 1.0，
+                            // 若用 withAnimation 提交 scale，effectiveScale 会先掉回 1x 再动画放大 —— 就是闪烁来源。
                             let newScale = scale * value
-                            withAnimation(.interactiveSpring(response: 0.3, dampingFraction: 0.8)) {
-                                scale = min(max(newScale, minScale), maxScale)
-                                if scale <= minScale {
-                                    scale = minScale
-                                    offset = .zero
-                                } else {
-                                    offset = clampedOffset(offset, scale: scale, fitted: fitted, container: containerSize)
+                            scale = newScale
+                            let clamped = min(max(newScale, minScale), maxScale)
+                            if clamped != newScale {
+                                // 越界：用动画把 scale 回弹修正到合法范围，并相应处理 offset。
+                                withAnimation(.interactiveSpring(response: 0.3, dampingFraction: 0.8)) {
+                                    scale = clamped
+                                    if scale <= minScale {
+                                        offset = .zero
+                                    } else {
+                                        offset = clampedOffset(offset, scale: scale, fitted: fitted, container: containerSize)
+                                    }
+                                }
+                            } else {
+                                // 合法范围内：scale 已连续落定，仅平滑 clamp 因放大变化的平移边界。
+                                let target = clampedOffset(offset, scale: scale, fitted: fitted, container: containerSize)
+                                if target != offset {
+                                    withAnimation(.interactiveSpring(response: 0.3, dampingFraction: 0.8)) {
+                                        offset = target
+                                    }
                                 }
                             }
                         }
@@ -351,8 +366,15 @@ private struct ZoomablePhoto: View {
                                 width: offset.width + value.translation.width,
                                 height: offset.height + value.translation.height
                             )
-                            withAnimation(.interactiveSpring(response: 0.3, dampingFraction: 0.85)) {
-                                offset = clampedOffset(proposed, scale: scale, fitted: fitted, container: containerSize)
+                            // 同理：gestureOffset 在 onEnded 瞬间回弹到 .zero。
+                            // 先无动画把 offset 落定到跟手位置（接管回弹，liveOffset 保持连续，消除松手跳动），
+                            // 再仅在越界时用动画 clamp 到边界。
+                            offset = proposed
+                            let clamped = clampedOffset(proposed, scale: scale, fitted: fitted, container: containerSize)
+                            if clamped != proposed {
+                                withAnimation(.interactiveSpring(response: 0.3, dampingFraction: 0.85)) {
+                                    offset = clamped
+                                }
                             }
                         }
                 )
