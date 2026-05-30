@@ -5,6 +5,7 @@ opt_out_usage
 # (e.g. simctl header "26.4" vs. runtime "26.4.1"). Must load before any
 # snapshot action runs.
 require_relative 'device_os_version_patch'
+require 'shellwords'
 
 default_platform(:ios)
 
@@ -316,6 +317,35 @@ platform :ios do
     summary << (skip_submit   ? "  • 提审  :⏭  未提交 (SKIP_SUBMIT=1)"       : "  • 提审  :✅ 已提交")
     summary << (skip_submit ? "" : (automatic ? "  • 发布  :🚀 审核通过后自动发布" : "  • 发布  :✋ 手动发布 (MANUAL_RELEASE=1)"))
     UI.success("发版流程结束:\n" + summary.reject(&:empty?).join("\n"))
+
+    # 自动给本次发版打 git tag（v{版本号}），让下一版的 release notes 边界精确。
+    # 版本号用 ASC 解析出的真实号（resolved_version，如 1.0.2），而非本地 pbxproj 旧值。
+    # 只在真正提审（!skip_submit）时打 tag —— 纯调试 / 仅元数据不打。
+    # 默认只打「本地」tag，不 push（push 由人手动，或显式 PUSH_TAG=1）。
+    #   SKIP_TAG=1   跳过打 tag
+    #   PUSH_TAG=1   打完本地 tag 后自动 push 到 origin
+    if ENV['SKIP_TAG'].to_s == '1'
+      UI.message("[release] 跳过打 tag (SKIP_TAG=1)")
+    elsif skip_submit
+      UI.message("[release] 未提审（SKIP_SUBMIT=1），跳过打 tag")
+    else
+      tag_version = (resolved_version && !resolved_version.empty?) ? resolved_version : app_marketing_version
+      tag_name    = "v#{tag_version}"
+      already     = sh("git tag -l #{tag_name.shellescape}", log: false).strip
+      if already.empty?
+        sh("git tag -a #{tag_name.shellescape} -m #{"Release #{tag_name}".shellescape}")
+        UI.success("[release] 🏷  已打本地 tag: #{tag_name}")
+        if ENV['PUSH_TAG'].to_s == '1'
+          sh("git push origin #{tag_name.shellescape}")
+          UI.success("[release] ⬆️  已推送 tag 到 origin: #{tag_name}")
+        else
+          UI.important("[release] 本地 tag 已创建但未推送。推送：git push origin #{tag_name}")
+          UI.important("[release] （或下次用 PUSH_TAG=1 make release 自动推送）")
+        end
+      else
+        UI.message("[release] tag #{tag_name} 已存在，跳过。如需重打：git tag -d #{tag_name} 后重试")
+      end
+    end
   end
 
   # 从项目 pbxproj 读取 MARKETING_VERSION,作为 ASC 上的 app_version。

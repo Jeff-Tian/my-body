@@ -654,20 +654,19 @@ auto-releasenotes:
 ##   SKIP_SNAPSHOT=1       无条件跳过截图
 ##   SNAPSHOT_MAX_AGE=24   截图新鲜度阈值(小时)
 ##   SKIP_RELEASE_NOTES=1  跳过自动生成 release notes(沿用 fastlane/metadata 里的现有文件)
+##                         默认每次发版都从 git commits 重新生成 release notes
 ##   SKIP_BINARY=1         不构建 / 不上传二进制(仅推文案 + 截图,不能提审)
 ##   SKIP_METADATA=1       不上传 App 文案
 ##   SKIP_SCREENSHOTS=1    不上传截图
 ##   SKIP_SUBMIT=1         上传完就停,不提交审核 / 不发布
 ##   MANUAL_RELEASE=1      审核通过后不自动发布,改为手动发布
+##   SKIP_TAG=1            提审成功后不自动打 git tag
+##   PUSH_TAG=1            打完本地 tag 后自动 push 到 origin(默认只打本地 tag,由你手动 push)
 .PHONY: release
 release: check_asc_env check_app_exists update_fastlane gen
 	@printf "$(GREEN)==> [1/4] 自动生成 release notes (从 git commits)$(NC)\n"
-	@RN_FILE=fastlane/metadata/zh-Hans/release_notes.txt; \
-	if [ "$${SKIP_RELEASE_NOTES:-0}" = "1" ]; then \
-		printf "$(YELLOW)[release] 跳过 release notes 生成 (SKIP_RELEASE_NOTES=1)$(NC)\n"; \
-	elif [ "$${FORCE_RELEASE_NOTES:-0}" != "1" ] && [ -s "$$RN_FILE" ]; then \
-		printf "$(YELLOW)[release] 已存在 release notes($$RN_FILE,$$(wc -c <"$$RN_FILE") bytes),跳过自动生成。$(NC)\n"; \
-		printf "$(YELLOW)         如需强制重新生成:FORCE_RELEASE_NOTES=1 make release$(NC)\n"; \
+	@if [ "$${SKIP_RELEASE_NOTES:-0}" = "1" ]; then \
+		printf "$(YELLOW)[release] 跳过 release notes 生成 (SKIP_RELEASE_NOTES=1，沿用 fastlane/metadata 现有文件)$(NC)\n"; \
 	else \
 		ruby scripts/auto_release_notes.rb || printf "$(YELLOW)[release] release notes 生成失败,继续使用 fastlane/metadata 里的现有文件$(NC)\n"; \
 	fi
@@ -683,11 +682,8 @@ release: check_asc_env check_app_exists update_fastlane gen
 .PHONY: release_metadata_only
 release_metadata_only: check_asc_env check_app_exists update_fastlane
 	@printf "$(GREEN)==> [1/3] 自动生成 release notes (从 git commits)$(NC)\n"
-	@RN_FILE=fastlane/metadata/zh-Hans/release_notes.txt; \
-	if [ "$${SKIP_RELEASE_NOTES:-0}" = "1" ]; then \
-		printf "$(YELLOW)[release_metadata_only] 跳过 release notes 生成 (SKIP_RELEASE_NOTES=1)$(NC)\n"; \
-	elif [ "$${FORCE_RELEASE_NOTES:-0}" != "1" ] && [ -s "$$RN_FILE" ]; then \
-		printf "$(YELLOW)[release_metadata_only] 已存在 release notes($$RN_FILE,$$(wc -c <"$$RN_FILE") bytes),跳过自动生成。FORCE_RELEASE_NOTES=1 可强制重生成。$(NC)\n"; \
+	@if [ "$${SKIP_RELEASE_NOTES:-0}" = "1" ]; then \
+		printf "$(YELLOW)[release_metadata_only] 跳过 release notes 生成 (SKIP_RELEASE_NOTES=1，沿用现有文件)$(NC)\n"; \
 	else \
 		ruby scripts/auto_release_notes.rb || printf "$(YELLOW)[release_metadata_only] release notes 生成失败,继续$(NC)\n"; \
 	fi
