@@ -1,6 +1,6 @@
 import Foundation
 
-enum ScanRange: String, CaseIterable, Identifiable {
+enum ScanRange: String, CaseIterable, Codable, Identifiable, Sendable {
     case last30Days = "last30"
     case last90Days = "last90"
     case lastYear = "lastYear"

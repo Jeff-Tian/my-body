@@ -20,6 +20,11 @@ final class PhotoScanService: ObservableObject {
     @Published var stageMessage: String = ""
 
     private let ocrService = OCRService()
+    private let checkpointStore: PhotoScanCheckpointStoring
+
+    init(checkpointStore: PhotoScanCheckpointStoring = UserDefaultsPhotoScanCheckpointStore()) {
+        self.checkpointStore = checkpointStore
+    }
 
     func requestAuthorization() async -> Bool {
         let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
@@ -68,6 +73,12 @@ final class PhotoScanService: ObservableObject {
             return
         }
 
+        let previousIdleTimerDisabled = UIApplication.shared.isIdleTimerDisabled
+        UIApplication.shared.isIdleTimerDisabled = true
+        defer {
+            UIApplication.shared.isIdleTimerDisabled = previousIdleTimerDisabled
+        }
+
         isScanning = true
         scanProgress = 0
         processedCount = 0
@@ -109,20 +120,67 @@ final class PhotoScanService: ObservableObject {
             assetList.append(assets[i])
         }
 
+        let checkpoint = (try? checkpointStore.load(for: range)).flatMap { $0.completed ? nil : $0 }
+        let resumeItems = assetList.map {
+            PhotoScanResumeItem(localIdentifier: $0.localIdentifier, creationDate: $0.creationDate)
+        }
+        let startIndex = checkpoint?.resumeStartIndex(in: resumeItems) ?? 0
+        let resumedDetectedAssetIdentifiers = checkpoint?.detectedAssetIdentifiers ?? []
+        let resumedDetectedCount = resumedDetectedAssetIdentifiers.isEmpty
+            ? checkpoint?.detectedCount ?? 0
+            : resumedDetectedAssetIdentifiers.count
+
+        if startIndex > 0 {
+            processedCount = min(startIndex, total)
+            detectedCount = resumedDetectedCount
+            scanProgress = Double(processedCount) / Double(total)
+            stageMessage = "正在继续上次扫描..."
+        }
+
         let scanSize = CGSize(width: 800, height: 800)
         let thumbSize = CGSize(width: 200, height: 200)
         let ocr = ocrService
+        let checkpointStore = checkpointStore
         // 用户可在 Settings 打开「扫描时也下载 iCloud」开关。默认关：扫描只用
         // 本地缓存，速度快、不耗流量。开启后会对粗筛阶段每张照片触发 iCloud
         // 下载（可能很慢、流量大）。无论这里如何，parse 阶段始终会下载 iCloud。
         let scanAllowsNetwork = UserDefaults.standard.bool(forKey: "iCloudPhotoDownload")
 
         // Run ALL heavy work (image loading + OCR) on a background thread
-        let detected: [ScannedPhoto] = await Task.detached(priority: .userInitiated) {
+        let scanResult: (detected: [ScannedPhoto], completed: Bool) = await Task.detached(priority: .userInitiated) {
             var results: [ScannedPhoto] = []
+            var detectedAssetIdentifiers: [String] = []
+            var completed = true
 
-            for (i, asset) in assetList.enumerated() {
-                if Task.isCancelled { break }
+            if !resumedDetectedAssetIdentifiers.isEmpty {
+                let assetsByIdentifier = Dictionary(
+                    assetList.map { ($0.localIdentifier, $0) },
+                    uniquingKeysWith: { first, _ in first }
+                )
+                for identifier in resumedDetectedAssetIdentifiers {
+                    guard let asset = assetsByIdentifier[identifier] else { continue }
+                    let thumb = self.requestImageSync(
+                        for: asset,
+                        targetSize: thumbSize,
+                        contentMode: .aspectFill,
+                        allowNetwork: scanAllowsNetwork
+                    )
+                    results.append(ScannedPhoto(asset: asset, thumbnail: thumb))
+                    detectedAssetIdentifiers.append(identifier)
+                }
+                let restoredDetectedCount = results.count
+                await MainActor.run {
+                    self.detectedCount = restoredDetectedCount
+                }
+            }
+
+            for i in startIndex..<assetList.count {
+                if Task.isCancelled {
+                    completed = false
+                    break
+                }
+
+                let asset = assetList[i]
 
                 await MainActor.run {
                     self.stageMessage = "正在读取第 \(i + 1) / \(total) 张照片..."
@@ -133,6 +191,16 @@ final class PhotoScanService: ObservableObject {
                     targetSize: scanSize,
                     allowNetwork: scanAllowsNetwork
                 ) else {
+                    let checkpoint = PhotoScanCheckpoint(
+                        scanRange: range,
+                        lastProcessedAssetIdentifier: asset.localIdentifier,
+                        lastProcessedCreationDate: asset.creationDate,
+                        processedCount: i + 1,
+                        detectedCount: results.count,
+                        detectedAssetIdentifiers: detectedAssetIdentifiers,
+                        completed: false
+                    )
+                    try? checkpointStore.save(checkpoint)
                     await MainActor.run {
                         self.processedCount = i + 1
                         self.scanProgress = Double(i + 1) / Double(total)
@@ -152,11 +220,23 @@ final class PhotoScanService: ObservableObject {
                         allowNetwork: scanAllowsNetwork
                     )
                     results.append(ScannedPhoto(asset: asset, thumbnail: thumb))
+                    detectedAssetIdentifiers.append(asset.localIdentifier)
                     let detectedSoFar = results.count
                     await MainActor.run {
                         self.detectedCount = detectedSoFar
                     }
                 }
+
+                let checkpoint = PhotoScanCheckpoint(
+                    scanRange: range,
+                    lastProcessedAssetIdentifier: asset.localIdentifier,
+                    lastProcessedCreationDate: asset.creationDate,
+                    processedCount: i + 1,
+                    detectedCount: results.count,
+                    detectedAssetIdentifiers: detectedAssetIdentifiers,
+                    completed: false
+                )
+                try? checkpointStore.save(checkpoint)
 
                 await MainActor.run {
                     self.processedCount = i + 1
@@ -164,11 +244,15 @@ final class PhotoScanService: ObservableObject {
                 }
             }
 
-            return results
+            return (results, completed)
         }.value
 
-        scannedPhotos = detected
-        stageMessage = detected.isEmpty ? "扫描完成，未发现报告" : "扫描完成"
+        if scanResult.completed {
+            try? checkpointStore.markCompleted(for: range)
+        }
+
+        scannedPhotos = scanResult.detected
+        stageMessage = scanResult.detected.isEmpty ? "扫描完成，未发现报告" : "扫描完成"
         isScanning = false
     }
 

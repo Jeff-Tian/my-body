@@ -9,6 +9,8 @@
 
 <!-- Append new learnings below. Each entry is something lasting about the project. -->
 
+- 2026-05-31: Photo scan checkpoint coverage lives best at two seams: `UserDefaultsPhotoScanCheckpointStore` with isolated `UserDefaults(suiteName:)`, and pure `PhotoScanCheckpoint.resumeStartIndex(in:)` tests using `PhotoScanResumeItem`. The full `PhotoScanService.scanPhotoLibrary` resume loop remains hard to unit-test directly because it is coupled to `PHAsset`/PhotoKit fetch results.
+
 ## Codebase (discovered 2026-05-15)
 
 - iOS 17+ Xcode project at root: `MyBody.xcodeproj` (generated via xcodegen — `project.yml`).

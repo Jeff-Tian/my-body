@@ -529,3 +529,16 @@ protocol HealthKitWriting {
 **By:** Lambert (iOS UI Developer)
 **What:** 在 `DetailView.swift` 的 `ZoomablePhoto` 中，MagnificationGesture 与 DragGesture 的 `.onEnded` 改为「先无动画连续落定、再动画修正越界」：先把提交态(scale/offset)无动画接管手势末值，仅越界时才 `withAnimation` clamp 回合法范围。
 **Why:** `@GestureState` 在手势结束会无动画瞬间回弹到默认值，与 `withAnimation` 提交 scale 冲突，导致 effectiveScale 先掉回 1x 再动画放大的闪烁。此模式可消除闪烁，同时保留双击、边界 clamp、可访问性。`make build` 通过。
+
+### 2026-05-31: Photo scan checkpoint QA coverage
+**By:** Parker (Tester / QA)
+**Status:** Tests added, unit suite green.
+
+**Decision / quality note:** Resumable photo scan checkpoint coverage should stay focused on the two currently testable seams:
+
+- `UserDefaultsPhotoScanCheckpointStore` for persistence, completion marking, corrupt/missing defaults data, and per-`ScanRange` isolation.
+- `PhotoScanCheckpoint.resumeStartIndex(in:)` for skip/resume decisions without PhotoKit.
+
+Parker did not broaden production seams in `PhotoScanService.scanPhotoLibrary`; the scan loop depends on `PHAsset` and PhotoKit fetch results, so a direct unit test would require a larger refactor than this QA pass warrants. If scan-loop tests become necessary later, Ripley should introduce a tiny asset/fetch abstraction first.
+
+**Verification:** `make test-unit` passed: 29 tests, 0 failures. `PhotoScanCheckpointStoreTests` now has 11 tests.
