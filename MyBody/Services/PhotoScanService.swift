@@ -88,14 +88,33 @@ final class PhotoScanService: ObservableObject {
         stageMessage = "正在读取相册..."
 
         let range = ScanRange.current
+
+        // Load any resumable checkpoint up front so we can FREEZE the scan window.
+        let existingCheckpoint = (try? checkpointStore.load(for: range)).flatMap { $0.completed ? nil : $0 }
+
+        // Freeze the exact scan window at scan start. When resuming a checkpoint
+        // that already has a frozen window, reuse it verbatim so the window does
+        // not drift forward (e.g. last90Days shifting by the days elapsed since
+        // the original scan). Otherwise capture a fresh anchor now.
+        let windowAnchorDate: Date
+        let windowStartDate: Date?
+        if let existingCheckpoint, existingCheckpoint.hasFrozenWindow {
+            windowAnchorDate = existingCheckpoint.windowAnchorDate ?? Date()
+            windowStartDate = existingCheckpoint.windowStartDate
+        } else {
+            let anchor = Date()
+            windowAnchorDate = anchor
+            windowStartDate = range.startDate(anchoredAt: anchor)
+        }
+
         let fetchOptions = PHFetchOptions()
         fetchOptions.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
 
-        if let startDate = range.startDate {
+        if let windowStartDate {
             fetchOptions.predicate = NSPredicate(
                 format: "mediaType == %d AND creationDate >= %@",
                 PHAssetMediaType.image.rawValue,
-                startDate as NSDate
+                windowStartDate as NSDate
             )
         } else {
             fetchOptions.predicate = NSPredicate(format: "mediaType == %d", PHAssetMediaType.image.rawValue)
@@ -120,7 +139,7 @@ final class PhotoScanService: ObservableObject {
             assetList.append(assets[i])
         }
 
-        let checkpoint = (try? checkpointStore.load(for: range)).flatMap { $0.completed ? nil : $0 }
+        let checkpoint = existingCheckpoint
         let resumeItems = assetList.map {
             PhotoScanResumeItem(localIdentifier: $0.localIdentifier, creationDate: $0.creationDate)
         }
@@ -198,6 +217,8 @@ final class PhotoScanService: ObservableObject {
                         processedCount: i + 1,
                         detectedCount: results.count,
                         detectedAssetIdentifiers: detectedAssetIdentifiers,
+                        windowStartDate: windowStartDate,
+                        windowAnchorDate: windowAnchorDate,
                         completed: false
                     )
                     try? checkpointStore.save(checkpoint)
@@ -234,6 +255,8 @@ final class PhotoScanService: ObservableObject {
                     processedCount: i + 1,
                     detectedCount: results.count,
                     detectedAssetIdentifiers: detectedAssetIdentifiers,
+                    windowStartDate: windowStartDate,
+                    windowAnchorDate: windowAnchorDate,
                     completed: false
                 )
                 try? checkpointStore.save(checkpoint)

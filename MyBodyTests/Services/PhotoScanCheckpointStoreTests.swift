@@ -50,6 +50,56 @@ final class PhotoScanCheckpointStoreTests: XCTestCase {
         XCTAssertNil(try store.load(for: .last90Days))
     }
 
+    func testFrozenScanWindowPersistsAndReloads() throws {
+        let store = UserDefaultsPhotoScanCheckpointStore(defaults: defaults)
+        let windowStart = Date(timeIntervalSince1970: 1_699_000_000)
+        let anchor = Date(timeIntervalSince1970: 1_700_000_000)
+        let checkpoint = PhotoScanCheckpoint(
+            scanRange: .last90Days,
+            lastProcessedAssetIdentifier: "asset-7",
+            lastProcessedCreationDate: Date(timeIntervalSince1970: 1_699_500_000),
+            processedCount: 7,
+            detectedCount: 1,
+            detectedAssetIdentifiers: ["report-1"],
+            windowStartDate: windowStart,
+            windowAnchorDate: anchor,
+            completed: false
+        )
+
+        try store.save(checkpoint)
+
+        let loaded = try XCTUnwrap(store.load(for: .last90Days))
+        XCTAssertEqual(loaded.windowStartDate, windowStart)
+        XCTAssertEqual(loaded.windowAnchorDate, anchor)
+        XCTAssertEqual(loaded, checkpoint)
+    }
+
+    func testLegacyCheckpointWithoutFrozenWindowStillDecodes() throws {
+        // Simulate a checkpoint persisted before the frozen-window fields existed.
+        let legacyJSON = """
+        {
+            "scanRange": "last90",
+            "lastProcessedAssetIdentifier": "legacy-asset",
+            "lastProcessedCreationDate": 1234567,
+            "processedCount": 12,
+            "detectedCount": 2,
+            "detectedAssetIdentifiers": ["r-1", "r-2"],
+            "completed": false
+        }
+        """
+        defaults.set(Data(legacyJSON.utf8), forKey: "photoScanCheckpoint.last90")
+
+        let store = UserDefaultsPhotoScanCheckpointStore(defaults: defaults)
+        let loaded = try XCTUnwrap(store.load(for: .last90Days))
+
+        XCTAssertEqual(loaded.lastProcessedAssetIdentifier, "legacy-asset")
+        XCTAssertEqual(loaded.processedCount, 12)
+        XCTAssertEqual(loaded.detectedAssetIdentifiers, ["r-1", "r-2"])
+        XCTAssertNil(loaded.windowStartDate)
+        XCTAssertNil(loaded.windowAnchorDate)
+        XCTAssertFalse(loaded.hasFrozenWindow)
+    }
+
     func testMarkCompletedPersistsCompletedCheckpoint() throws {
         let store = UserDefaultsPhotoScanCheckpointStore(defaults: defaults)
         let checkpoint = PhotoScanCheckpoint(

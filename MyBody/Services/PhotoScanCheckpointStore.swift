@@ -12,7 +12,19 @@ struct PhotoScanCheckpoint: Codable, Equatable, Sendable {
     let processedCount: Int
     let detectedCount: Int
     let detectedAssetIdentifiers: [String]
+    /// Frozen scan-window lower bound captured at scan start. `nil` means no
+    /// lower bound (matching `.all`) OR a legacy checkpoint with no frozen
+    /// window — disambiguate with `hasFrozenWindow`.
+    let windowStartDate: Date?
+    /// The `now` anchor captured at scan start. `nil` for legacy checkpoints
+    /// persisted before the frozen window existed.
+    let windowAnchorDate: Date?
     var completed: Bool
+
+    /// Whether this checkpoint carries a frozen scan window. Legacy checkpoints
+    /// (decoded without `windowAnchorDate`) return `false` so resume can fall
+    /// back to recomputing the relative range.
+    var hasFrozenWindow: Bool { windowAnchorDate != nil }
 
     init(
         scanRange: ScanRange,
@@ -21,6 +33,8 @@ struct PhotoScanCheckpoint: Codable, Equatable, Sendable {
         processedCount: Int,
         detectedCount: Int,
         detectedAssetIdentifiers: [String] = [],
+        windowStartDate: Date? = nil,
+        windowAnchorDate: Date? = nil,
         completed: Bool
     ) {
         self.scanRange = scanRange
@@ -29,6 +43,8 @@ struct PhotoScanCheckpoint: Codable, Equatable, Sendable {
         self.processedCount = processedCount
         self.detectedCount = detectedCount
         self.detectedAssetIdentifiers = detectedAssetIdentifiers
+        self.windowStartDate = windowStartDate
+        self.windowAnchorDate = windowAnchorDate
         self.completed = completed
     }
 
@@ -39,6 +55,8 @@ struct PhotoScanCheckpoint: Codable, Equatable, Sendable {
         case processedCount
         case detectedCount
         case detectedAssetIdentifiers
+        case windowStartDate
+        case windowAnchorDate
         case completed
     }
 
@@ -50,6 +68,8 @@ struct PhotoScanCheckpoint: Codable, Equatable, Sendable {
         processedCount = try container.decode(Int.self, forKey: .processedCount)
         detectedCount = try container.decode(Int.self, forKey: .detectedCount)
         detectedAssetIdentifiers = try container.decodeIfPresent([String].self, forKey: .detectedAssetIdentifiers) ?? []
+        windowStartDate = try container.decodeIfPresent(Date.self, forKey: .windowStartDate)
+        windowAnchorDate = try container.decodeIfPresent(Date.self, forKey: .windowAnchorDate)
         completed = try container.decode(Bool.self, forKey: .completed)
     }
 

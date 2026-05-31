@@ -19,11 +19,20 @@ enum ScanRange: String, CaseIterable, Codable, Identifiable, Sendable {
 
     /// Start date cutoff. Returns nil for .all (no filter).
     var startDate: Date? {
+        startDate(anchoredAt: Date())
+    }
+
+    /// Start date cutoff computed relative to an explicit anchor instead of `now`.
+    ///
+    /// Use this to FREEZE a scan window at scan start: capture the anchor once,
+    /// persist it in the checkpoint, and recompute the same cutoff on resume so
+    /// the window does not drift forward between sessions. Returns nil for `.all`.
+    func startDate(anchoredAt anchor: Date) -> Date? {
         let calendar = Calendar.current
         switch self {
-        case .last30Days: return calendar.date(byAdding: .day, value: -30, to: Date())
-        case .last90Days: return calendar.date(byAdding: .day, value: -90, to: Date())
-        case .lastYear: return calendar.date(byAdding: .year, value: -1, to: Date())
+        case .last30Days: return calendar.date(byAdding: .day, value: -30, to: anchor)
+        case .last90Days: return calendar.date(byAdding: .day, value: -90, to: anchor)
+        case .lastYear: return calendar.date(byAdding: .year, value: -1, to: anchor)
         case .all: return nil
         }
     }
