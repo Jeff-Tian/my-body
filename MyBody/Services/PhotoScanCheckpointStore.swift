@@ -19,12 +19,28 @@ struct PhotoScanCheckpoint: Codable, Equatable, Sendable {
     /// The `now` anchor captured at scan start. `nil` for legacy checkpoints
     /// persisted before the frozen window existed.
     let windowAnchorDate: Date?
+    /// `true` once the *scan* phase (粗筛/检测) has fully completed for the
+    /// frozen window. A scan-completed checkpoint can still have unfinished
+    /// recognition — see `recognitionCompleted`.
     var completed: Bool
+    /// Asset identifiers (a subset of `detectedAssetIdentifiers`) whose
+    /// recognition (OCR + 保存数据) has already finished. Used to resume the
+    /// recognition phase after an interruption without re-scanning the album.
+    var recognizedAssetIdentifiers: [String]
+    /// `true` once recognition has finished for every detected photo, i.e. the
+    /// whole 扫描→识别→保存 pipeline is done and the checkpoint can be discarded
+    /// / treated as fully complete.
+    var recognitionCompleted: Bool
 
     /// Whether this checkpoint carries a frozen scan window. Legacy checkpoints
     /// (decoded without `windowAnchorDate`) return `false` so resume can fall
     /// back to recomputing the relative range.
     var hasFrozenWindow: Bool { windowAnchorDate != nil }
+
+    /// `true` when scanning finished but recognition has not — i.e. the next
+    /// launch should resume directly into the recognition phase using the
+    /// already-detected photos instead of re-scanning the album.
+    var needsRecognitionResume: Bool { completed && !recognitionCompleted }
 
     init(
         scanRange: ScanRange,
@@ -35,7 +51,9 @@ struct PhotoScanCheckpoint: Codable, Equatable, Sendable {
         detectedAssetIdentifiers: [String] = [],
         windowStartDate: Date? = nil,
         windowAnchorDate: Date? = nil,
-        completed: Bool
+        completed: Bool,
+        recognizedAssetIdentifiers: [String] = [],
+        recognitionCompleted: Bool = false
     ) {
         self.scanRange = scanRange
         self.lastProcessedAssetIdentifier = lastProcessedAssetIdentifier
@@ -46,6 +64,8 @@ struct PhotoScanCheckpoint: Codable, Equatable, Sendable {
         self.windowStartDate = windowStartDate
         self.windowAnchorDate = windowAnchorDate
         self.completed = completed
+        self.recognizedAssetIdentifiers = recognizedAssetIdentifiers
+        self.recognitionCompleted = recognitionCompleted
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -58,6 +78,8 @@ struct PhotoScanCheckpoint: Codable, Equatable, Sendable {
         case windowStartDate
         case windowAnchorDate
         case completed
+        case recognizedAssetIdentifiers
+        case recognitionCompleted
     }
 
     init(from decoder: Decoder) throws {
@@ -71,6 +93,8 @@ struct PhotoScanCheckpoint: Codable, Equatable, Sendable {
         windowStartDate = try container.decodeIfPresent(Date.self, forKey: .windowStartDate)
         windowAnchorDate = try container.decodeIfPresent(Date.self, forKey: .windowAnchorDate)
         completed = try container.decode(Bool.self, forKey: .completed)
+        recognizedAssetIdentifiers = try container.decodeIfPresent([String].self, forKey: .recognizedAssetIdentifiers) ?? []
+        recognitionCompleted = try container.decodeIfPresent(Bool.self, forKey: .recognitionCompleted) ?? false
     }
 
     func resumeStartIndex(in assets: [PhotoScanResumeItem]) -> Int {
@@ -91,7 +115,15 @@ struct PhotoScanCheckpoint: Codable, Equatable, Sendable {
 protocol PhotoScanCheckpointStoring: Sendable {
     func load(for scanRange: ScanRange) throws -> PhotoScanCheckpoint?
     func save(_ checkpoint: PhotoScanCheckpoint) throws
+    /// Marks the *scan* phase complete (粗筛/检测全部跑完). Recognition may still
+    /// be pending — see `markRecognized` / `markRecognitionCompleted`.
     func markCompleted(for scanRange: ScanRange) throws
+    /// Records that recognition (OCR + 保存) finished for `assetIdentifier`,
+    /// appending it to `recognizedAssetIdentifiers` so the recognition phase can
+    /// resume after an interruption.
+    func markRecognized(assetIdentifier: String, for scanRange: ScanRange) throws
+    /// Marks recognition complete for the whole batch — the full pipeline is done.
+    func markRecognitionCompleted(for scanRange: ScanRange) throws
 }
 
 final class UserDefaultsPhotoScanCheckpointStore: PhotoScanCheckpointStoring, @unchecked Sendable {
@@ -117,6 +149,19 @@ final class UserDefaultsPhotoScanCheckpointStore: PhotoScanCheckpointStoring, @u
     func markCompleted(for scanRange: ScanRange) throws {
         guard var checkpoint = try load(for: scanRange) else { return }
         checkpoint.completed = true
+        try save(checkpoint)
+    }
+
+    func markRecognized(assetIdentifier: String, for scanRange: ScanRange) throws {
+        guard var checkpoint = try load(for: scanRange) else { return }
+        guard !checkpoint.recognizedAssetIdentifiers.contains(assetIdentifier) else { return }
+        checkpoint.recognizedAssetIdentifiers.append(assetIdentifier)
+        try save(checkpoint)
+    }
+
+    func markRecognitionCompleted(for scanRange: ScanRange) throws {
+        guard var checkpoint = try load(for: scanRange) else { return }
+        checkpoint.recognitionCompleted = true
         try save(checkpoint)
     }
 

@@ -40,6 +40,10 @@ final class ScanViewModel {
     private let ocrService = OCRService()
     private var modelContext: ModelContext?
     private var progressObserver: Task<Void, Never>?
+    /// 标记当前 `parseNextPhoto` 流程是否属于「相册批量扫描」上下文。
+    /// 仅在该上下文下才把识别进度写入扫描断点（单张导入不属于任何扫描区间，
+    /// 不应改动断点状态）。
+    private var isBatchScanContext = false
 
     func setup(context: ModelContext) {
         self.modelContext = context
@@ -47,6 +51,7 @@ final class ScanViewModel {
 
     func startScan() async {
         isScanning = true
+        isBatchScanContext = true
         scanProgress = 0
         totalCount = 0
         processedCount = 0
@@ -75,7 +80,15 @@ final class ScanViewModel {
         scanProgress = 1.0
         isScanning = false
 
-        if !scannedPhotos.isEmpty {
+        guard !scannedPhotos.isEmpty else { return }
+
+        // 若本次是「识别阶段断点续传」（上次扫完但识别中断），直接跳过确认网格，
+        // 自动从上次的识别进度继续。已保存的记录会被去重逻辑跳过。
+        if photoService.resumedRecognition {
+            currentParseIndex = 0
+            isParsing = true
+            await parseNextPhoto()
+        } else {
             showConfirmation = true
         }
     }
@@ -93,8 +106,7 @@ final class ScanViewModel {
     func parseNextPhoto() async {
         let selected = selectedPhotos
         guard currentParseIndex < selected.count else {
-            batchFinished = true
-            isParsing = false
+            finishBatch()
             return
         }
 
@@ -109,13 +121,16 @@ final class ScanViewModel {
         if let context = modelContext, recordExists(forAssetId: assetId, in: context) {
             duplicateCount += 1
             duplicateAssetIds.append(assetId)
+            // 该照片已识别（之前已导入），记入识别进度断点。
+            if isBatchScanContext {
+                photoService.recordRecognized(assetIdentifier: assetId)
+            }
             currentParseIndex += 1
             parseStageMessage = ""
             if currentParseIndex < selected.count {
                 await parseNextPhoto()
             } else {
-                batchFinished = true
-                isParsing = false
+                finishBatch()
             }
             return
         }
@@ -202,6 +217,11 @@ final class ScanViewModel {
             }
         }
 
+        // 该照片识别 + 保存完成，记入识别进度断点，用于中断后续传。
+        if isBatchScanContext {
+            photoService.recordRecognized(assetIdentifier: photo.asset.localIdentifier)
+        }
+
         currentParseIndex += 1
         parseStageMessage = ""
 
@@ -209,9 +229,18 @@ final class ScanViewModel {
         if currentParseIndex < selected.count {
             await parseNextPhoto()
         } else {
-            batchFinished = true
-            isParsing = false
+            finishBatch()
         }
+    }
+
+    /// 批量识别全部完成时调用：标记整条流水线（扫描→识别→保存）完成，
+    /// 这样下次进入不会再续传，而是从头开始一次全新扫描。
+    private func finishBatch() {
+        if isBatchScanContext {
+            photoService.recordRecognitionCompleted()
+        }
+        batchFinished = true
+        isParsing = false
     }
 
     func reset() {
@@ -229,6 +258,7 @@ final class ScanViewModel {
         duplicateAssetIds = []
         reparseIndex = 0
         reparseTotal = 0
+        isBatchScanContext = false
     }
 
     /// 单张照片导入：跳过相册扫描和确认网格,直接对一张图片走 OCR/保存流程。

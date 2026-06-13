@@ -18,6 +18,12 @@ final class PhotoScanService: ObservableObject {
     @Published var processedCount: Int = 0
     @Published var detectedCount: Int = 0
     @Published var stageMessage: String = ""
+    /// `true` when the most recent `scanPhotoLibrary()` call resumed directly
+    /// into the recognition phase (skipping the album scan) because a previous
+    /// run finished scanning but was interrupted during recognition. The view
+    /// model uses this to jump straight to parsing instead of showing the
+    /// confirmation grid again.
+    @Published var resumedRecognition = false
 
     private let ocrService = OCRService()
     private let checkpointStore: PhotoScanCheckpointStoring
@@ -85,12 +91,27 @@ final class PhotoScanService: ObservableObject {
         detectedCount = 0
         totalCount = 0
         scannedPhotos = []
+        resumedRecognition = false
         stageMessage = "正在读取相册..."
 
         let range = ScanRange.current
 
-        // Load any resumable checkpoint up front so we can FREEZE the scan window.
-        let existingCheckpoint = (try? checkpointStore.load(for: range)).flatMap { $0.completed ? nil : $0 }
+        // If a previous run already finished SCANNING but was interrupted during
+        // RECOGNITION, resume straight into recognition: rebuild the detected
+        // photos from the checkpoint and skip the (slow) album scan entirely.
+        if let resumeCheckpoint = (try? checkpointStore.load(for: range)),
+           resumeCheckpoint.needsRecognitionResume {
+            resumedRecognition = true
+            await restoreDetectedPhotos(from: resumeCheckpoint)
+            return
+        }
+
+        // Load any resumable mid-scan checkpoint up front so we can FREEZE the
+        // scan window. `needsRecognitionResume` checkpoints were already handled
+        // above; any `completed` checkpoint reaching here is fully done, so we
+        // treat it as "nothing to resume" and start a fresh scan.
+        let existingCheckpoint = (try? checkpointStore.load(for: range))
+            .flatMap { $0.completed ? nil : $0 }
 
         // Freeze the exact scan window at scan start. When resuming a checkpoint
         // that already has a frozen window, reuse it verbatim so the window does
@@ -277,6 +298,67 @@ final class PhotoScanService: ObservableObject {
         scannedPhotos = scanResult.detected
         stageMessage = scanResult.detected.isEmpty ? "扫描完成，未发现报告" : "扫描完成"
         isScanning = false
+    }
+
+    /// Resume the recognition phase after an interruption: rebuild the detected
+    /// photos (with thumbnails) directly from the checkpoint's
+    /// `detectedAssetIdentifiers`, skipping the album scan entirely. Recognition
+    /// itself stays idempotent (already-saved records are de-duplicated), so it
+    /// is safe to re-run through all detected photos and skip finished ones.
+    private func restoreDetectedPhotos(from checkpoint: PhotoScanCheckpoint) async {
+        stageMessage = "正在恢复上次的识别进度..."
+
+        let identifiers = checkpoint.detectedAssetIdentifiers
+        guard !identifiers.isEmpty else {
+            scannedPhotos = []
+            stageMessage = "扫描完成，未发现报告"
+            isScanning = false
+            return
+        }
+
+        let thumbSize = CGSize(width: 200, height: 200)
+        let scanAllowsNetwork = UserDefaults.standard.bool(forKey: "iCloudPhotoDownload")
+
+        let restored: [ScannedPhoto] = await Task.detached(priority: .userInitiated) {
+            let fetch = PHAsset.fetchAssets(withLocalIdentifiers: identifiers, options: nil)
+            var assetsByIdentifier: [String: PHAsset] = [:]
+            fetch.enumerateObjects { asset, _, _ in
+                assetsByIdentifier[asset.localIdentifier] = asset
+            }
+
+            var photos: [ScannedPhoto] = []
+            // Preserve the original detection order.
+            for identifier in identifiers {
+                guard let asset = assetsByIdentifier[identifier] else { continue }
+                let thumb = self.requestImageSync(
+                    for: asset,
+                    targetSize: thumbSize,
+                    contentMode: .aspectFill,
+                    allowNetwork: scanAllowsNetwork
+                )
+                photos.append(ScannedPhoto(asset: asset, thumbnail: thumb))
+            }
+            return photos
+        }.value
+
+        scannedPhotos = restored
+        totalCount = checkpoint.processedCount
+        processedCount = checkpoint.processedCount
+        detectedCount = restored.count
+        scanProgress = 1.0
+        stageMessage = restored.isEmpty ? "扫描完成，未发现报告" : "扫描完成"
+        isScanning = false
+    }
+
+    /// Persist that recognition finished for `assetIdentifier` in the current
+    /// scan range, so the recognition phase can resume after an interruption.
+    func recordRecognized(assetIdentifier: String) {
+        try? checkpointStore.markRecognized(assetIdentifier: assetIdentifier, for: ScanRange.current)
+    }
+
+    /// Mark the whole 扫描→识别→保存 pipeline complete for the current scan range.
+    func recordRecognitionCompleted() {
+        try? checkpointStore.markRecognitionCompleted(for: ScanRange.current)
     }
 
     func loadFullImage(for asset: PHAsset) async -> UIImage? {

@@ -261,4 +261,137 @@ final class PhotoScanCheckpointStoreTests: XCTestCase {
 
         XCTAssertEqual(checkpoint.resumeStartIndex(in: assets), 0)
     }
+
+    // MARK: - Recognition phase resume
+
+    func testRecognitionFieldsRoundTrip() throws {
+        let store = UserDefaultsPhotoScanCheckpointStore(defaults: defaults)
+        let checkpoint = PhotoScanCheckpoint(
+            scanRange: .last90Days,
+            lastProcessedAssetIdentifier: "asset-5",
+            lastProcessedCreationDate: Date(timeIntervalSince1970: 1_700_000_005),
+            processedCount: 5,
+            detectedCount: 3,
+            detectedAssetIdentifiers: ["r-1", "r-2", "r-3"],
+            completed: true,
+            recognizedAssetIdentifiers: ["r-1", "r-2"],
+            recognitionCompleted: false
+        )
+
+        try store.save(checkpoint)
+
+        let loaded = try XCTUnwrap(store.load(for: .last90Days))
+        XCTAssertEqual(loaded.recognizedAssetIdentifiers, ["r-1", "r-2"])
+        XCTAssertFalse(loaded.recognitionCompleted)
+        XCTAssertEqual(loaded, checkpoint)
+    }
+
+    func testLegacyCheckpointDefaultsRecognitionFields() throws {
+        // A checkpoint persisted before the recognition fields existed must
+        // decode with empty recognized list and recognitionCompleted == false.
+        let legacyJSON = """
+        {
+            "scanRange": "last90",
+            "lastProcessedAssetIdentifier": "legacy-asset",
+            "lastProcessedCreationDate": 1234567,
+            "processedCount": 12,
+            "detectedCount": 2,
+            "detectedAssetIdentifiers": ["r-1", "r-2"],
+            "completed": true
+        }
+        """
+        defaults.set(Data(legacyJSON.utf8), forKey: "photoScanCheckpoint.last90")
+
+        let store = UserDefaultsPhotoScanCheckpointStore(defaults: defaults)
+        let loaded = try XCTUnwrap(store.load(for: .last90Days))
+
+        XCTAssertTrue(loaded.recognizedAssetIdentifiers.isEmpty)
+        XCTAssertFalse(loaded.recognitionCompleted)
+        // Scan-complete legacy checkpoint must resume into recognition.
+        XCTAssertTrue(loaded.needsRecognitionResume)
+    }
+
+    func testNeedsRecognitionResumeOnlyWhenScanDoneButRecognitionPending() {
+        let scanInProgress = PhotoScanCheckpoint(
+            scanRange: .last90Days,
+            lastProcessedAssetIdentifier: "a",
+            lastProcessedCreationDate: nil,
+            processedCount: 1,
+            detectedCount: 0,
+            completed: false
+        )
+        XCTAssertFalse(scanInProgress.needsRecognitionResume)
+
+        let scanDoneRecognitionPending = PhotoScanCheckpoint(
+            scanRange: .last90Days,
+            lastProcessedAssetIdentifier: "a",
+            lastProcessedCreationDate: nil,
+            processedCount: 1,
+            detectedCount: 1,
+            completed: true,
+            recognitionCompleted: false
+        )
+        XCTAssertTrue(scanDoneRecognitionPending.needsRecognitionResume)
+
+        let fullyDone = PhotoScanCheckpoint(
+            scanRange: .last90Days,
+            lastProcessedAssetIdentifier: "a",
+            lastProcessedCreationDate: nil,
+            processedCount: 1,
+            detectedCount: 1,
+            completed: true,
+            recognitionCompleted: true
+        )
+        XCTAssertFalse(fullyDone.needsRecognitionResume)
+    }
+
+    func testMarkRecognizedAppendsIdentifierAndIsIdempotent() throws {
+        let store = UserDefaultsPhotoScanCheckpointStore(defaults: defaults)
+        let checkpoint = PhotoScanCheckpoint(
+            scanRange: .last90Days,
+            lastProcessedAssetIdentifier: "asset-3",
+            lastProcessedCreationDate: nil,
+            processedCount: 3,
+            detectedCount: 2,
+            detectedAssetIdentifiers: ["r-1", "r-2"],
+            completed: true
+        )
+        try store.save(checkpoint)
+
+        try store.markRecognized(assetIdentifier: "r-1", for: .last90Days)
+        try store.markRecognized(assetIdentifier: "r-1", for: .last90Days)  // duplicate
+        try store.markRecognized(assetIdentifier: "r-2", for: .last90Days)
+
+        let loaded = try XCTUnwrap(store.load(for: .last90Days))
+        XCTAssertEqual(loaded.recognizedAssetIdentifiers, ["r-1", "r-2"])
+        XCTAssertFalse(loaded.recognitionCompleted)
+    }
+
+    func testMarkRecognizedWithoutCheckpointDoesNothing() throws {
+        let store = UserDefaultsPhotoScanCheckpointStore(defaults: defaults)
+
+        try store.markRecognized(assetIdentifier: "r-1", for: .last90Days)
+
+        XCTAssertNil(try store.load(for: .last90Days))
+    }
+
+    func testMarkRecognitionCompletedSetsFlag() throws {
+        let store = UserDefaultsPhotoScanCheckpointStore(defaults: defaults)
+        let checkpoint = PhotoScanCheckpoint(
+            scanRange: .last90Days,
+            lastProcessedAssetIdentifier: "asset-3",
+            lastProcessedCreationDate: nil,
+            processedCount: 3,
+            detectedCount: 2,
+            detectedAssetIdentifiers: ["r-1", "r-2"],
+            completed: true
+        )
+        try store.save(checkpoint)
+
+        try store.markRecognitionCompleted(for: .last90Days)
+
+        let loaded = try XCTUnwrap(store.load(for: .last90Days))
+        XCTAssertTrue(loaded.recognitionCompleted)
+        XCTAssertFalse(loaded.needsRecognitionResume)
+    }
 }
