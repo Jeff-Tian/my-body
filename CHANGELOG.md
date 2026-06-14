@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0] - 2026-06-14
+
+### zh-Hans
+- 增强了扫描和识别阶段的检查点功能。
+- 新增了冻结扫描窗口功能。
+- 添加了照片扫描检查点功能。
+
+### en-US
+- Improved checkpointing for scan and recognition phases.  
+- Introduced a frozen scan window feature.  
+- Added photo scan checkpointing functionality.
+
 ## [1.0] - 2026-05-30
 
 ### zh-Hans
