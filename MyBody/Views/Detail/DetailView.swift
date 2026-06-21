@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import Photos
 
 // MARK: - Environment key for cross-record navigation
 
@@ -24,7 +25,7 @@ struct DetailView: View {
     /// 当前 record 在 records 中的索引（仅在 records 非 nil 时有效）。
     let recordIndex: Int
 
-    @State private var showDeleteAlert = false
+    @State private var showDeleteOptions = false
     @State private var showEditSheet = false
     @State private var showFullPhoto = false
     // MARK: - 重新识别 (re-OCR with current parser)
@@ -191,23 +192,29 @@ struct DetailView: View {
                     Image(systemName: "pencil")
                 }
                 .disabled(isReparsing)
-                Button { showDeleteAlert = true } label: {
-                    Image(systemName: "trash")
+                Button {
+                    showDeleteOptions = true
+                } label: {
+                    Label("删除", systemImage: "trash")
                         .foregroundColor(.red)
                 }
                 .disabled(isReparsing)
                 nextButton
             }
         }
-        .alert("确认删除", isPresented: $showDeleteAlert) {
-            Button("取消", role: .cancel) {}
-            Button("删除", role: .destructive) {
-                modelContext.delete(record)
-                try? modelContext.save()
-                dismiss()
+        // 删除确认：先询问用户选择哪种删除方式
+        .confirmationDialog("删除记录", isPresented: $showDeleteOptions, titleVisibility: .visible) {
+            Button("仅删除数据", role: .destructive) {
+                deleteDataOnly()
             }
+            if record.photoAssetIdentifier?.isEmpty == false {
+                Button("删除数据并删除 iCloud 照片", role: .destructive) {
+                    deleteDataAndPhoto()
+                }
+            }
+            Button("取消", role: .cancel) {}
         } message: {
-            Text("删除后无法恢复，确定要删除这条记录吗？")
+            Text("删除后无法恢复。选择「仅删除数据」只移除 App 内的记录；选择「删除数据并删除 iCloud 照片」还会从相册中移除原始照片。")
         }
         // TODO(Ash): 当 InBodyRecord 增加 `hasManualEdits` 标记后，
         // 在这里根据该标记替换为更强的警告文案（例如列出被覆盖的字段）。
@@ -255,6 +262,16 @@ struct DetailView: View {
                             .clipShape(RoundedRectangle(cornerRadius: 12))
                     }
                 }
+
+                Button(role: .destructive) {
+                    showDeleteOptions = true
+                } label: {
+                    Label("删除此报告", systemImage: "trash")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.red)
+                .disabled(isReparsing)
 
                 // 当既无原图也无相册标识时，「重新识别」按钮会被禁用 —— 说明原因，避免“灰着没反应”。
                 if !canReparse {
@@ -372,6 +389,36 @@ struct DetailView: View {
             return "无法访问原始照片，可能已被删除或权限被撤销。"
         }
         return "识别失败：\(error.localizedDescription)"
+    }
+
+    // MARK: - 删除
+
+    /// 仅删除 SwiftData 记录，不触碰相册照片
+    private func deleteDataOnly() {
+        modelContext.delete(record)
+        try? modelContext.save()
+        dismiss()
+    }
+
+    /// 删除 SwiftData 记录 + 从相册删除原始 PHAsset
+    private func deleteDataAndPhoto() {
+        guard let assetId = record.photoAssetIdentifier, !assetId.isEmpty else {
+            // 没有相册标识，退化为仅删除数据
+            deleteDataOnly()
+            return
+        }
+
+        // 先从相册删除 PHAsset
+        PHAsset.fetchAssets(withLocalIdentifiers: [assetId], options: nil)
+            .firstObject
+            .map { asset in
+                PHPhotoLibrary.shared().performChanges {
+                    PHAssetChangeRequest.deleteAssets([asset] as NSFastEnumeration)
+                }
+            }
+
+        // 再删除 SwiftData 记录
+        deleteDataOnly()
     }
 
     // MARK: - Helpers
