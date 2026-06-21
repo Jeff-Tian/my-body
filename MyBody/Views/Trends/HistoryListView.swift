@@ -1,8 +1,26 @@
 import SwiftUI
 import SwiftData
 
+// MARK: - Environment key for record selection
+
+private struct SelectedRecordKey: EnvironmentKey {
+    static var defaultValue: Binding<InBodyRecord?>? = nil
+}
+
+extension EnvironmentValues {
+    private struct SelectedRecordKey: EnvironmentKey {
+        static var defaultValue: Binding<InBodyRecord?>? = nil
+    }
+
+    var selectedRecord: Binding<InBodyRecord?>? {
+        get { self[SelectedRecordKey.self] }
+        set { self[SelectedRecordKey.self] = newValue }
+    }
+}
+
 struct HistoryListView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.selectedRecord) private var selectedRecord
     let records: [InBodyRecord]
     /// 记录被删除后通知父视图刷新列表
     var onDelete: (() -> Void)? = nil
@@ -22,7 +40,7 @@ struct HistoryListView: View {
                     .padding(.horizontal)
             } else {
                 ForEach(Array(records.enumerated()), id: \.element.id) { index, record in
-                    NavigationLink(destination: DetailView(record: record)) {
+                    NavigationLink(destination: buildDestination(record: record, index: index)) {
                         HistoryRow(record: record)
                             .contentShape(Rectangle())
                             .accessibilityIdentifier("history-row-\(index)")
@@ -56,6 +74,18 @@ struct HistoryListView: View {
             }
         } message: { _ in
             Text("删除后无法恢复，确定要删除这条记录吗？")
+        }
+    }
+
+    @ViewBuilder
+    private func buildDestination(record: InBodyRecord, index: Int) -> some View {
+        if let idx = records.firstIndex(where: { $0.id == record.id }) {
+            DetailView(record: record, records: records, recordIndex: idx)
+                .environment(\.navigateToRecord) { newRecord in
+                    selectedRecord?.wrappedValue = newRecord
+                }
+        } else {
+            DetailView(record: record, records: nil, recordIndex: 0)
         }
     }
 }

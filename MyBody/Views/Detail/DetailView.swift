@@ -1,10 +1,29 @@
 import SwiftUI
 import SwiftData
 
+// MARK: - Environment key for cross-record navigation
+
+extension EnvironmentValues {
+    private struct NavigateToRecordKey: EnvironmentKey {
+        static let defaultValue: (InBodyRecord) -> Void = { _ in }
+    }
+
+    var navigateToRecord: (InBodyRecord) -> Void {
+        get { self[NavigateToRecordKey.self] }
+        set { self[NavigateToRecordKey.self] = newValue }
+    }
+}
+
 struct DetailView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.navigateToRecord) private var navigateToRecord: (InBodyRecord) -> Void
     let record: InBodyRecord
+    /// 可选：同列表的全部记录，用于在详情页内前后切换。
+    let records: [InBodyRecord]?
+    /// 当前 record 在 records 中的索引（仅在 records 非 nil 时有效）。
+    let recordIndex: Int
+
     @State private var showDeleteAlert = false
     @State private var showEditSheet = false
     @State private var showFullPhoto = false
@@ -14,6 +33,11 @@ struct DetailView: View {
     @State private var reparseError: String?
     @State private var showReparseSuccess = false
 
+    /// 手势拖动中的水平偏移量
+    @GestureState private var dragOffset: CGFloat = 0
+    /// 拖动时显示的提示方向：-1=左滑(上一条), 0=无, 1=右滑(下一条)
+    @State private var dragHintDirection: Int = 0
+
     /// 是否具备「重新识别」所需的原图来源：
     /// 优先看随记录持久化的 `photoData`（始终本地），其次看相册标识 `photoAssetIdentifier`。
     /// 只要任一存在即可重新识别 —— 与 `ScanViewModel.reparseExistingReport` 的取图顺序保持一致。
@@ -21,9 +45,120 @@ struct DetailView: View {
         record.photoData != nil || (record.photoAssetIdentifier?.isEmpty == false)
     }
 
+    /// 是否有上一条记录
+    private var hasPrevious: Bool {
+        recordIndex > 0
+    }
+
+    /// 是否有下一条记录
+    private var hasNext: Bool {
+        recordIndex < (records?.count ?? 0) - 1
+    }
+
+    /// 当前记录在列表中的序号（从 1 开始）
+    private var recordPosition: String {
+        if let records, !records.isEmpty {
+            let current = recordIndex + 1
+            return "\(current) / \(records.count)"
+        }
+        return ""
+    }
+
+    private func navigateTo(_ index: Int) {
+        guard index >= 0, let records, index < records.count else { return }
+        navigateToRecord(records[index])
+    }
+
+    private var positionIndicator: some View {
+        if let records, !records.isEmpty {
+            return AnyView(
+                Text(recordPosition)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.gray.opacity(0.2), in: RoundedRectangle(cornerRadius: 4))
+            )
+        }
+        return AnyView(EmptyView())
+    }
+
+    private var nextButton: some View {
+        if !(records?.isEmpty ?? true) {
+            return AnyView(
+                Button {
+                    navigateTo(recordIndex + 1)
+                } label: {
+                    Label("下一条", systemImage: "chevron.right")
+                }
+                .disabled(!hasNext)
+                .accessibilityLabel("下一条记录")
+            )
+        }
+        return AnyView(EmptyView())
+    }
+
+    /// 左右滑动切换记录的手势
+    private func swipeGesture(in screenWidth: CGFloat) -> some Gesture {
+        DragGesture()
+            .onChanged { value in
+                let horizontal = value.translation.width
+                let threshold: CGFloat = 40
+                if horizontal > threshold {
+                    dragHintDirection = 1
+                } else if horizontal < -threshold {
+                    dragHintDirection = -1
+                } else {
+                    dragHintDirection = 0
+                }
+            }
+            .onEnded { value in
+                let horizontal = value.translation.width
+                let velocity = value.velocity.width
+                let combined = horizontal + velocity * 0.1
+                if combined > 60 {
+                    // 右滑 → 上一条
+                    navigateTo(recordIndex - 1)
+                    dragHintDirection = 0
+                } else if combined < -60 {
+                    // 左滑 → 下一条
+                    navigateTo(recordIndex + 1)
+                    dragHintDirection = 0
+                } else {
+                    dragHintDirection = 0
+                }
+            }
+    }
+
+    private func swipeHintText(_ text: String, alignment: Alignment) -> some View {
+        Text(text)
+            .font(.subheadline)
+            .fontWeight(.medium)
+            .foregroundColor(.white)
+            .padding(8)
+            .background(Color.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 8))
+            .opacity(dragHintDirection != 0 ? 1 : 0)
+            .transition(.opacity)
+            .padding(.horizontal, 16)
+    }
+
     var body: some View {
         ZStack {
-            scrollContent
+            GeometryReader { geo in
+                scrollContent
+                    .gesture(swipeGesture(in: geo.size.width))
+                    .overlay(alignment: .leading) {
+                        if dragHintDirection == 1 {
+                            swipeHintText("← 上一条", alignment: .leading)
+                        }
+                    }
+                    .overlay(alignment: .trailing) {
+                        if dragHintDirection == -1 {
+                            swipeHintText("下一条 →", alignment: .trailing)
+                        }
+                    }
+            }
+            .ignoresSafeArea()
             if isReparsing {
                 reparsingOverlay
             }
@@ -32,7 +167,19 @@ struct DetailView: View {
         .navigationTitle("报告详情")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItemGroup(placement: .topBarLeading) {
+                if let records, !records.isEmpty {
+                    Button {
+                        navigateTo(recordIndex - 1)
+                    } label: {
+                        Label("上一条", systemImage: "chevron.left")
+                    }
+                    .disabled(!hasPrevious)
+                    .accessibilityLabel("上一条记录")
+                }
+            }
             ToolbarItemGroup(placement: .topBarTrailing) {
+                positionIndicator
                 Button {
                     showReparseConfirm = true
                 } label: {
@@ -49,6 +196,7 @@ struct DetailView: View {
                         .foregroundColor(.red)
                 }
                 .disabled(isReparsing)
+                nextButton
             }
         }
         .alert("确认删除", isPresented: $showDeleteAlert) {

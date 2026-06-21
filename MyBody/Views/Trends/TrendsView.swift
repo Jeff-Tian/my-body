@@ -75,13 +75,14 @@ struct TrendsView: View {
                     HistoryListView(records: viewModel.filteredRecords) {
                         viewModel.fetchRecords()
                     }
+                    .environment(\.selectedRecord, $selectedRecord)
                 }
                 .padding(.vertical)
             }
             .background(Color.appBackground)
             .navigationTitle("趋势")
             .navigationDestination(item: $selectedRecord) { record in
-                DetailView(record: record)
+                detailDestination(for: record)
             }
             .toolbarColorScheme(.dark, for: .navigationBar)
             .toolbarBackground(Color.appGreen, for: .navigationBar)
@@ -120,6 +121,23 @@ struct TrendsView: View {
                 }
             }
             .modifier(WeightHealthWriteOverlay(controller: $writeController))
+        }
+    }
+
+    @ViewBuilder
+    private func detailDestination(for record: InBodyRecord) -> some View {
+        let filtered = viewModel.filteredRecords
+        if let idx = filtered.firstIndex(where: { $0.id == record.id }) {
+            DetailView(
+                record: record,
+                records: filtered,
+                recordIndex: idx
+            )
+            .environment(\.navigateToRecord) { newRecord in
+                selectedRecord = newRecord
+            }
+        } else {
+            DetailView(record: record, records: nil, recordIndex: 0)
         }
     }
 }
