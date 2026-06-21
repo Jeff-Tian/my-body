@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0] - 2026-06-21
+
+### zh-Hans
+- 允许删除 iCloud 照片。
+- 改进导航和记录选择功能。
+- 增强图表交互和数据点导航。
+
+### en-US
+- You can now delete iCloud photos directly from the app.  
+- Navigation and record selection functionality has been improved.  
+- Chart interaction and data point navigation have been enhanced.
+
 ## [1.0] - 2026-06-14
 
 ### zh-Hans

@@ -1,20 +1,11 @@
-# Dynamically detect an available iPhone Pro Max / Pro simulator so we don't
-# break when Xcode ships new device names. Capture the UDID so we can look up
-# the exact OS version xcodebuild expects below.
+# Apple App Store Connect only accepts Pro Max resolution (1290x2796).
+# Hard-code to the latest available Pro Max to avoid auto-detection picking
+# a non-Pro-Max device that produces invalid screenshot sizes.
+# Override via SNAPSHOT_DEVICE env var when needed:
+#   SNAPSHOT_DEVICE="iPhone 16 Pro Max" make screenshots
 snapshot_device = ENV['SNAPSHOT_DEVICE'] if ENV['SNAPSHOT_DEVICE'] && !ENV['SNAPSHOT_DEVICE'].empty?
-snapshot_udid = nil
 if snapshot_device.nil?
-  available = `xcrun simctl list devices available 2>/dev/null`.lines.map(&:strip)
-  iphone_devices = available.select { |l| l =~ /^iPhone.*\([-A-F0-9]+\)/i }
-  picked = iphone_devices.reverse.find { |l| l =~ /Pro Max/i } ||
-           iphone_devices.reverse.find { |l| l =~ /Pro/i } ||
-           iphone_devices.last
-  if picked
-    snapshot_device = picked.sub(/\s*\([-A-F0-9]+\).*/, '')
-    snapshot_udid = picked[/\(([-A-F0-9]+)\)/, 1]
-  else
-    snapshot_device = 'iPhone 16 Pro Max'
-  end
+  snapshot_device = 'iPhone 17 Pro Max'
 end
 devices([snapshot_device])
 
@@ -28,15 +19,13 @@ devices([snapshot_device])
 begin
   xctrace_out = `xcrun xctrace list devices 2>&1`
   version = nil
-  if snapshot_udid
-    line = xctrace_out.lines.map(&:strip).find { |l| l.include?(snapshot_udid) }
-    version = line[/\(([\d.]+)\)\s+\([-A-F0-9]+\)\s*$/, 1] if line
+  # Find the line matching our snapshot_device and extract the OS version
+  lines = xctrace_out.lines.map(&:strip)
+  matching_lines = lines.select do |l|
+    l =~ /^#{Regexp.escape(snapshot_device)}(?:\s+Simulator)?\s+\([\d.]+\)\s+\([-A-F0-9]+\)/i
   end
-  if version.nil?
-    versions = xctrace_out.lines.map(&:strip).select do |l|
-      l =~ /^#{Regexp.escape(snapshot_device)}(?:\s+Simulator)?\s+\([\d.]+\)\s+\([-A-F0-9]+\)/i
-    end.map { |l| l[/\(([\d.]+)\)\s+\([-A-F0-9]+\)\s*$/, 1] }.compact
-    version = versions.max_by { |v| v.split('.').map(&:to_i) }
+  if matching_lines.any?
+    version = matching_lines.map { |l| l[/\(([\d.]+)\)\s+\([-A-F0-9]+\)\s*$/, 1] }.compact.max_by { |v| v.split('.').map(&:to_i) }
   end
   ios_version(version) if version
 rescue StandardError
