@@ -6,6 +6,7 @@ struct TrendsView: View {
     @Environment(\.modelContext) private var modelContext
     @State private var viewModel = TrendsViewModel()
     @State private var writeController: WeightHealthWriteController?
+    @State private var selectedRecord: InBodyRecord?
 
     var body: some View {
         NavigationStack {
@@ -53,7 +54,12 @@ struct TrendsView: View {
                     MetricChartView(
                         data: viewModel.chartData,
                         metric: viewModel.selectedMetric
-                    )
+                    ) { recordID in
+                        // Find the record from filtered records
+                        if let record = viewModel.filteredRecords.first(where: { $0.id == recordID }) {
+                            selectedRecord = record
+                        }
+                    }
                     .frame(height: 250)
                     .cardStyle()
                     .padding(.horizontal)
@@ -74,6 +80,9 @@ struct TrendsView: View {
             }
             .background(Color.appBackground)
             .navigationTitle("趋势")
+            .navigationDestination(item: $selectedRecord) { record in
+                DetailView(record: record)
+            }
             .toolbarColorScheme(.dark, for: .navigationBar)
             .toolbarBackground(Color.appGreen, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)

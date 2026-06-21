@@ -4,6 +4,7 @@ import Charts
 struct MetricChartView: View {
     let data: [ChartDataPoint]
     let metric: MetricType
+    var onPointTap: ((UUID) -> Void)? = nil
 
     var body: some View {
         if data.isEmpty {
@@ -71,6 +72,43 @@ struct MetricChartView: View {
             .chartYAxis {
                 AxisMarks(position: .leading)
             }
+            // Single overlay gesture for tap-to-detail. This replaces the previous
+            // per-point invisible Rectangle annotations, which created one interactive
+            // accessibility node per data point and bloated the accessibility tree.
+            .chartOverlay { proxy in
+                GeometryReader { geo in
+                    Rectangle()
+                        .fill(Color.clear)
+                        .contentShape(Rectangle())
+                        .onTapGesture { location in
+                            guard let onPointTap else { return }
+                            if let recordID = nearestRecordID(to: location, proxy: proxy, geo: geo) {
+                                onPointTap(recordID)
+                            }
+                        }
+                }
+            }
+            // Collapse the chart's internal accessibility tree into a single element.
+            // Swift Charts otherwise exposes one accessibility node per mark/point/axis
+            // label, which makes XCUITest's UI-query traversal extremely slow and causes
+            // snapshot timeouts ("main thread busy" / "Timed out while evaluating UI query").
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Text("\(metric.rawValue)趋势图"))
         }
+    }
+
+    /// Finds the record whose plotted x-position is closest to the tap location.
+    private func nearestRecordID(to location: CGPoint, proxy: ChartProxy, geo: GeometryProxy) -> UUID? {
+        let plotFrame: CGRect
+        if let anchor = proxy.plotFrame {
+            plotFrame = geo[anchor]
+        } else {
+            plotFrame = geo.frame(in: .local)
+        }
+        let xInPlot = location.x - plotFrame.origin.x
+        guard let tappedDate: Date = proxy.value(atX: xInPlot) else { return nil }
+        return data.min(by: {
+            abs($0.date.timeIntervalSince(tappedDate)) < abs($1.date.timeIntervalSince(tappedDate))
+        })?.recordID
     }
 }

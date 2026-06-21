@@ -64,6 +64,7 @@ struct ChartDataPoint: Identifiable {
     let id = UUID()
     let date: Date
     let value: Double
+    let recordID: UUID
 }
 
 @MainActor
@@ -103,7 +104,7 @@ final class TrendsViewModel {
     var chartData: [ChartDataPoint] {
         filteredRecords.reversed().compactMap { record in
             guard let value = selectedMetric.value(from: record) else { return nil }
-            return ChartDataPoint(date: record.scanDate, value: value)
+            return ChartDataPoint(date: record.scanDate, value: value, recordID: record.id)
         }
     }
 

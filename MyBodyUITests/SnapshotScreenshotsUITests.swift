@@ -25,12 +25,12 @@ final class SnapshotScreenshotsUITests: XCTestCase {
     @MainActor
     func testGenerateScreenshots() throws {
         let app = XCUIApplication()
-        setupSnapshot(app)
+        setupSnapshot(app, waitForAnimations: false)
         // Inject sample data so the home / trends screens look realistic even on a fresh simulator.
         app.launchArguments += ["-UITestScreenshots", "1"]
         app.launch()
 
-        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 20), "App not foreground")
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 30), "App not foreground")
 
         // Tab bar buttons (system-localized). Try both zh-Hans and en fallbacks.
         let tabBars = app.tabBars
@@ -59,6 +59,9 @@ final class SnapshotScreenshotsUITests: XCTestCase {
 
         // 2) Trends (history list)
         trendsTab?.tap()
+        // Wait for the first history row to appear (indicates Trends screen data loaded).
+        let firstRow = app.descendants(matching: .any)["history-row-0"].firstMatch
+        XCTAssertTrue(firstRow.waitForExistence(timeout: 20), "First history row not found on Trends tab")
         usleep(800_000)
         snapshot("02-trends")
 
@@ -66,7 +69,7 @@ final class SnapshotScreenshotsUITests: XCTestCase {
         // NavigationLink's accessibility element type varies by iOS version (button / link /
         // other), so match by identifier across all descendant types.
         let historyRow = app.descendants(matching: .any)["history-row-0"].firstMatch
-        XCTAssertTrue(historyRow.waitForExistence(timeout: 8), "history-row-0 not found on Trends tab")
+        XCTAssertTrue(historyRow.waitForExistence(timeout: 15), "history-row-0 not found on Trends tab")
         // Row sits below a long chart; scroll it fully into view before tapping.
         var scrollAttempts = 0
         while !historyRow.isHittable && scrollAttempts < 6 {

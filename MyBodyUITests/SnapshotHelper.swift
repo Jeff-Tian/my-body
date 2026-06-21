@@ -33,7 +33,7 @@ func snapshot(_ name: String, waitForLoadingIndicator: Bool) {
 ///   - name: The name of the snapshot
 ///   - timeout: Amount of seconds to wait until the network loading indicator disappears. Pass `0` if you don't want to wait.
 @MainActor
-func snapshot(_ name: String, timeWaitingForIdle timeout: TimeInterval = 20) {
+func snapshot(_ name: String, timeWaitingForIdle timeout: TimeInterval = 60) {
     Snapshot.snapshot(name, timeWaitingForIdle: timeout)
 }
 
@@ -71,12 +71,19 @@ open class Snapshot: NSObject {
         do {
             let cacheDir = try getCacheDirectory()
             Snapshot.cacheDirectory = cacheDir
+            try createScreenshotsDirectory()
             setLanguage(app)
             setLocale(app)
             setLaunchArguments(app)
         } catch let error {
             NSLog(error.localizedDescription)
         }
+    }
+
+    private class func createScreenshotsDirectory() throws {
+        guard let cacheDirectory = self.cacheDirectory else { return }
+        let screenshotsDir = cacheDirectory.appendingPathComponent("screenshots", isDirectory: true)
+        try FileManager.default.createDirectory(at: screenshotsDir, withIntermediateDirectories: true)
     }
 
     class func setLanguage(_ app: XCUIApplication) {
@@ -142,7 +149,7 @@ open class Snapshot: NSObject {
         }
     }
 
-    open class func snapshot(_ name: String, timeWaitingForIdle timeout: TimeInterval = 20) {
+    open class func snapshot(_ name: String, timeWaitingForIdle timeout: TimeInterval = 60) {
         if timeout > 0 {
             waitForLoadingIndicatorToDisappear(within: timeout)
         }
