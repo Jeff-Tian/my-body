@@ -6,6 +6,7 @@ struct SettingsView: View {
     @AppStorage("syncWeightToHealth") private var syncWeightToHealth = false
     @State private var showingPrivacy = false
     @State private var showingWebsite = false
+    @State private var showingLogs = false
     @State private var healthAuthError: String?
 
     private var appVersion: String {
@@ -101,6 +102,23 @@ struct SettingsView: View {
                     }
                     .accessibilityIdentifier("openWebsiteButton")
                     .foregroundStyle(.primary)
+
+                    Button {
+                        showingLogs = true
+                    } label: {
+                        HStack {
+                            Text("运行日志")
+                            Spacer()
+                            Text("\(LoggerService.shared.count) 条")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                            Image(systemName: "chevron.right")
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                    .accessibilityIdentifier("openLogsButton")
+                    .foregroundStyle(.primary)
                 } header: {
                     Text("关于")
                 } footer: {
@@ -120,6 +138,11 @@ struct SettingsView: View {
                 PrivacyView(url: URL(string: PrivacyView.websiteURLString)!)
                     .ignoresSafeArea()
                     .accessibilityIdentifier("websiteSheetRoot")
+            }
+            .sheet(isPresented: $showingLogs) {
+                LogView()
+                    .ignoresSafeArea()
+                    .accessibilityIdentifier("logsSheetRoot")
             }
             .alert("无法启用同步", isPresented: .init(
                 get: { healthAuthError != nil },

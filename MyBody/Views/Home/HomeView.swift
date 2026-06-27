@@ -8,7 +8,11 @@ struct HomeView: View {
     @State private var showImport = false
     @State private var showSinglePicker = false
     @State private var pickedItem: PhotosPickerItem?
-    @State private var showSingleImport = false
+    @State private var pickedPHAsset: PHAsset?
+    @State private var importAsset: PHAsset?  // 用于 fullScreenCover 的预加载资产
+    @State private var showImportSheet = false  // 控制 fullScreenCover 显示
+    @State private var showSinglePhotoImport = false  // 单张照片导入专用
+    @State private var singlePhotoAsset: PHAsset?  // 单张照片导入的 PHAsset
 
     var body: some View {
         NavigationStack {
@@ -49,7 +53,8 @@ struct HomeView: View {
                 // FAB
                 Menu {
                     Button {
-                        showImport = true
+                        importAsset = nil  // 批量扫描：无预加载资产
+                        showImportSheet = true
                     } label: {
                         Label("扫描相册", systemImage: "photo.on.rectangle.angled")
                     }
@@ -77,11 +82,6 @@ struct HomeView: View {
             .onAppear {
                 viewModel.setup(context: modelContext)
             }
-            .sheet(isPresented: $showImport) {
-                viewModel.fetchRecords()
-            } content: {
-                PhotoScanView()
-            }
             .photosPicker(
                 isPresented: $showSinglePicker,
                 selection: $pickedItem,
@@ -89,18 +89,48 @@ struct HomeView: View {
                 photoLibrary: .shared()
             )
             .onChange(of: pickedItem) { _, newItem in
-                if newItem != nil {
-                    showSingleImport = true
+                LoggerService.shared.log("[HomeView.onChange] pickedItem changed")
+                if let newItem, let id = newItem.itemIdentifier {
+                    let fetch = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil)
+                    if let asset = fetch.firstObject {
+                        singlePhotoAsset = asset
+                        LoggerService.shared.log("[HomeView.onChange] singlePhotoAsset set to \(asset.localIdentifier), opening single photo import")
+                        showSinglePhotoImport = true
+                    }
+                } else {
+                    LoggerService.shared.log("[HomeView.onChange] pickedItem is nil, clearing singlePhotoAsset")
+                    singlePhotoAsset = nil
                 }
             }
-            .sheet(isPresented: $showSingleImport) {
-                pickedItem = nil
-                viewModel.fetchRecords()
-            } content: {
-                if let item = pickedItem {
-                    SinglePhotoImportView(item: item)
+            .fullScreenCover(isPresented: $showSinglePhotoImport) {
+                OnAppearBlock {
+                    viewModel.fetchRecords()
                 }
+                PhotoScanView(preloadedAsset: singlePhotoAsset)
+                    .onDisappear {
+                        singlePhotoAsset = nil
+                    }
+            }
+            .fullScreenCover(isPresented: $showImportSheet) {
+                OnAppearBlock {
+                    viewModel.fetchRecords()
+                }
+                PhotoScanView(preloadedAsset: importAsset)
+                    .onDisappear {
+                        importAsset = nil
+                    }
             }
         }
+    }
+}
+
+// MARK: - Helpers
+
+/// A zero-size view that runs a side-effect on appear.
+/// Used to run non-View-returning code inside a SwiftUI view builder.
+private struct OnAppearBlock: View {
+    let action: () -> Void
+    var body: some View {
+        Color.clear.onAppear(perform: action)
     }
 }

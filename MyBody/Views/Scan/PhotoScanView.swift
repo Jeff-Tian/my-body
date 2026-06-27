@@ -1,10 +1,21 @@
 import SwiftUI
 import SwiftData
+import Photos
 
 struct PhotoScanView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
     @State private var viewModel = ScanViewModel()
+
+    /// 预加载的 PHAsset（单张照片导入时使用）。非 nil 时跳过相册扫描。
+    /// 用普通属性接收，在 onAppear 中设置到 viewModel 中。
+    fileprivate let preloadedAsset: PHAsset?
+
+    /// 初始化器：传入预加载的 PHAsset 时，跳过相册扫描，进入确认网格。
+    init(preloadedAsset: PHAsset? = nil) {
+        self.preloadedAsset = preloadedAsset
+        LoggerService.shared.log("[PhotoScanView.init] preloadedAsset = \(preloadedAsset != nil) \(preloadedAsset?.localIdentifier ?? "nil")")
+    }
 
     // MARK: - 批量「重新识别」交互状态
     /// 批量结束后，若 `duplicateAssetIds.count > 0`，弹出确认 alert。
@@ -20,6 +31,17 @@ struct PhotoScanView: View {
         var hasFailures: Bool { failed > 0 }
     }
 
+    // MARK: - 移动到「身记」相册状态
+
+    /// 扫描完成后，弹出「是否将检测到的报告照片移动到「身记」相册」的确认对话框。
+    @State private var showMoveToShenjiAlert = false
+    /// 正在执行移动操作。
+    @State private var isMovingToShenji = false
+    /// 移动完成后的提示。
+    @State private var showMoveToShenjiSuccess = false
+
+    // MARK: - Body
+
     var body: some View {
         NavigationStack {
             ZStack {
@@ -31,6 +53,10 @@ struct PhotoScanView: View {
                             viewModel.isParsing = true   // 立即显示 loading，避免等 Task 调度时闪白
                             Task { await viewModel.parseNextPhoto() }
                         }
+                    } else if viewModel.batchFinished {
+                        // 批量完成后，不显示 scanningView 的兜底加载态，
+                        // 让 alert 独占屏幕，避免用户困惑。
+                        Color.clear
                     } else {
                         scanningView
                     }
@@ -47,20 +73,65 @@ struct PhotoScanView: View {
                         viewModel.reset()
                         dismiss()
                     }
-                    .disabled(isReparsing)
+                    .disabled(isReparsing || isMovingToShenji)
                 }
             }
             .onAppear {
+                LoggerService.shared.log("[PhotoScanView.onAppear] preloadedAsset = \(preloadedAsset != nil)")
                 viewModel.setup(context: modelContext)
-                Task { await viewModel.startScan() }
+                if let asset = preloadedAsset {
+                    LoggerService.shared.log("[PhotoScanView.onAppear] 单张导入模式")
+                    viewModel.preloadedAsset = asset
+                    Task { await viewModel.startSingleImport(from: asset) }
+                } else {
+                    LoggerService.shared.log("[PhotoScanView.onAppear] 批量扫描模式")
+                    Task { await viewModel.startScan() }
+                }
             }
             .onChange(of: viewModel.batchFinished) { _, finished in
                 guard finished else { return }
+                // 优先处理「重新识别」弹窗（有重复照片时）
                 if viewModel.duplicateAssetIds.isEmpty {
-                    dismiss()
+                    // 没有重复照片：直接弹出「移动到身记相册」确认
+                    viewModel.moveToShenjiAlbum = true
+                    viewModel.didAskMoveToShenji = true
+                    showMoveToShenjiAlert = true
                 } else {
                     showReparseDuplicatesConfirm = true
                 }
+            }
+            .alert("移动到「身记」相册？", isPresented: $showMoveToShenjiAlert) {
+                MoveToShenjiToggle(isOn: $viewModel.moveToShenjiAlbum)
+                Button("取消") {
+                    dismiss()
+                }
+                Button("移动并退出") {
+                    if viewModel.moveToShenjiAlbum {
+                        Task {
+                            LoggerService.shared.log("[PhotoScanView] 移动并退出, scannedPhotos.count = \(viewModel.scannedPhotos.count)")
+                            isMovingToShenji = true
+                            let count = await viewModel.moveDetectedPhotosToShenjiAlbum()
+                            LoggerService.shared.log("[PhotoScanView] 移动返回 count = \(count)")
+                            isMovingToShenji = false
+                            if count > 0 {
+                                showMoveToShenjiSuccess = true
+                                dismiss()
+                            } else {
+                                // 移动失败，直接退出
+                                dismiss()
+                            }
+                        }
+                    } else {
+                        dismiss()
+                    }
+                }
+            } message: {
+                Text("本次扫描发现 \(viewModel.scannedPhotos.count) 张报告照片。是否将它们全部移动到「身记」相册中方便管理？如果该相册不存在，将自动创建。")
+            }
+            .alert("已完成", isPresented: $showMoveToShenjiSuccess) {
+                Button("确定") { }
+            } message: {
+                Text("已将 \(viewModel.scannedPhotos.count) 张报告照片移动到「身记」相册。")
             }
             .alert("重新识别已有报告？", isPresented: $showReparseDuplicatesConfirm) {
                 Button("跳过", role: .cancel) {
@@ -125,7 +196,11 @@ struct PhotoScanView: View {
 
         try? await Task.sleep(nanoseconds: 2_500_000_000)
         withAnimation { reparseSummary = nil }
-        dismiss()
+
+        // 重新识别完成后，也弹出「移动到身记相册」确认
+        viewModel.moveToShenjiAlbum = true
+        viewModel.didAskMoveToShenji = true
+        showMoveToShenjiAlert = true
     }
 
     private var scanningView: some View {
@@ -175,22 +250,31 @@ struct PhotoScanView: View {
                     }
                 }
             } else if viewModel.scannedPhotos.isEmpty {
-                Image(systemName: "photo.on.rectangle.angled")
-                    .font(.system(size: 60))
-                    .foregroundColor(.gray.opacity(0.4))
-                Text("未在相册中找到 InBody 报告")
-                    .foregroundColor(.secondary)
+                if viewModel.isSingleImport {
+                    // 单张导入：正在等待 startSingleImport 加载照片
+                    ProgressView()
+                        .scaleEffect(1.2)
+                    Text("正在加载照片…")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                } else {
+                    Image(systemName: "photo.on.rectangle.angled")
+                        .font(.system(size: 60))
+                        .foregroundColor(.gray.opacity(0.4))
+                    Text("未在相册中找到 InBody 报告")
+                        .foregroundColor(.secondary)
 
-                Button {
-                    Task { await viewModel.startScan() }
-                } label: {
-                    Label("重新扫描", systemImage: "arrow.clockwise")
-                        .font(.headline)
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 24)
-                        .padding(.vertical, 12)
-                        .background(Color.appGreen)
-                        .clipShape(Capsule())
+                    Button {
+                        Task { await viewModel.startScan() }
+                    } label: {
+                        Label("重新扫描", systemImage: "arrow.clockwise")
+                            .font(.headline)
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 24)
+                            .padding(.vertical, 12)
+                            .background(Color.appGreen)
+                            .clipShape(Capsule())
+                    }
                 }
             }
 
@@ -306,5 +390,16 @@ private struct BatchReparseBanner: View {
         .background(background, in: Capsule())
         .shadow(color: .black.opacity(0.15), radius: 6, y: 2)
         .accessibilityLabel(text)
+    }
+}
+
+// MARK: - 移动到「身记」相册 Toggle
+
+/// 包装 Toggle 以避免在 .alert 中直接使用导致编译器类型推断超时。
+internal struct MoveToShenjiToggle: View {
+    @Binding var isOn: Bool
+
+    var body: some View {
+        Toggle("扫描完成后自动移动", isOn: $isOn)
     }
 }
