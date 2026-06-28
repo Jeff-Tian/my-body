@@ -508,33 +508,25 @@ platform :ios do
   end
 
   # 声明「不收集任何数据」并发布。幂等:已发布则跳过。
+  # 注意:不能用 get_app_data_usages 来判断——它查的是具体数据类型记录,
+  # 当你选"未收集数据"时 Apple 不在 /dataUsages 端点返回任何记录。
+  # 必须用 AppDataUsagesPublishState.get 查发布状态。
   def ensure_privacy_no_data_collected!(app)
     begin
-      existing = Spaceship::ConnectAPI.get_app_data_usages(
-        app_id: app.id, limit: 1
-      )
+      state = Spaceship::ConnectAPI::AppDataUsagesPublishState.get(app_id: app.id)
     rescue => e
-      UI.important("[privacy] 查询 data usages 失败: #{e.message}")
-      existing = nil
+      UI.important("[privacy] 查询 publish state 失败: #{e.message}")
+      state = nil
     end
 
-    if existing && existing.any?
-      UI.success("[privacy] 已有 data usage 声明 #{existing.size} 条,跳过。")
-    else
-      UI.message("[privacy] 尚未声明 → 标记为「不收集任何数据」并发布…")
+    if state && state.published
+      UI.success("[privacy] ✅ 数据使用声明已发布,跳过。")
+      return
     end
 
-    # 无论有没有记录,都把 publish state 置为「已发布 / 不收集数据」。
-    # Spaceship 的方法:patch_app_data_usages_publish_state
-    begin
-      Spaceship::ConnectAPI.patch_app_data_usages_publish_state(
-        app_data_usages_publish_state_id: app.id,
-        published: true
-      )
-      UI.success("[privacy] ✅ 已发布「不收集任何数据」声明。")
-    rescue => e
-      UI.important("[privacy] ⚠️ 自动发布失败: #{e.message}")
-      UI.important("[privacy] 请到 ASC → App 隐私 点「开始」→ 选「未收集数据」→ 发布。")
-    end
+    # 没有已发布的声明
+    UI.important("[privacy] ⚠️ 尚未发布数据使用声明。")
+    UI.important("[privacy] 请到 ASC → App 隐私 点「开始」→ 选「未收集数据」→ 发布。")
+    UI.important("[privacy] 这是一次性操作,发布后下次 make release 会自动跳过。")
   end
 end

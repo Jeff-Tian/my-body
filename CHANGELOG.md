@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0] - 2026-06-28
+
+### zh-Hans
+- 在设置页面添加了日志入口。
+- 更新了版本变化。
+- 修复了移动照片到身记相册的功能。
+- 选择单张照片后，确保再次触发扫描识别流程。
+- 选择单张照片后，避免进入全相册扫描。
+
+### en-US
+- Added a log entry in the settings page.  
+- Updated version changes for better clarity.  
+- Fixed the issue with moving photos to the album.  
+- Ensured scanning recognition process triggers again for previously selected photos.  
+- Prevented entering full album scan after selecting a single photo.
+
 ## [1.0] - 2026-06-21
 
 ### zh-Hans
