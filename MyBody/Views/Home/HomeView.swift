@@ -11,8 +11,7 @@ struct HomeView: View {
     @State private var pickedPHAsset: PHAsset?
     @State private var importAsset: PHAsset?  // 用于 fullScreenCover 的预加载资产
     @State private var showImportSheet = false  // 控制 fullScreenCover 显示
-    @State private var showSinglePhotoImport = false  // 单张照片导入专用
-    @State private var singlePhotoAsset: PHAsset?  // 单张照片导入的 PHAsset
+    @State private var singlePhotoItem: SinglePhotoItem?  // 单张照片导入的 PHAsset（包装为 Identifiable 以驱动 fullScreenCover(item:)）
 
     var body: some View {
         NavigationStack {
@@ -93,23 +92,19 @@ struct HomeView: View {
                 if let newItem, let id = newItem.itemIdentifier {
                     let fetch = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil)
                     if let asset = fetch.firstObject {
-                        singlePhotoAsset = asset
-                        LoggerService.shared.log("[HomeView.onChange] singlePhotoAsset set to \(asset.localIdentifier), opening single photo import")
-                        showSinglePhotoImport = true
+                        LoggerService.shared.log("[HomeView.onChange] singlePhotoItem set to \(asset.localIdentifier), opening single photo import")
+                        singlePhotoItem = SinglePhotoItem(asset: asset)
                     }
                 } else {
-                    LoggerService.shared.log("[HomeView.onChange] pickedItem is nil, clearing singlePhotoAsset")
-                    singlePhotoAsset = nil
+                    LoggerService.shared.log("[HomeView.onChange] pickedItem is nil, clearing singlePhotoItem")
+                    singlePhotoItem = nil
                 }
             }
-            .fullScreenCover(isPresented: $showSinglePhotoImport) {
+            .fullScreenCover(item: $singlePhotoItem) { item in
                 OnAppearBlock {
                     viewModel.fetchRecords()
                 }
-                PhotoScanView(preloadedAsset: singlePhotoAsset)
-                    .onDisappear {
-                        singlePhotoAsset = nil
-                    }
+                PhotoScanView(preloadedAsset: item.asset)
             }
             .fullScreenCover(isPresented: $showImportSheet) {
                 OnAppearBlock {
@@ -125,6 +120,13 @@ struct HomeView: View {
 }
 
 // MARK: - Helpers
+
+/// 包装单张导入的 PHAsset 为 Identifiable，用于驱动 `fullScreenCover(item:)`，
+/// 保证打开 cover 时 asset 一定非 nil（避免落入全相册扫描分支）。
+private struct SinglePhotoItem: Identifiable {
+    let asset: PHAsset
+    var id: String { asset.localIdentifier }
+}
 
 /// A zero-size view that runs a side-effect on appear.
 /// Used to run non-View-returning code inside a SwiftUI view builder.
