@@ -37,43 +37,31 @@ struct PhotoScanView: View {
     @State private var showMoveToShenjiAlert = false
     /// 正在执行移动操作。
     @State private var isMovingToShenji = false
-    /// 移动完成后的提示。
-    @State private var showMoveToShenjiSuccess = false
 
     // MARK: - Body
 
     var body: some View {
         NavigationStack {
-            ZStack {
-                Group {
-                    if viewModel.showConfirmation {
-                        ScanConfirmView(viewModel: viewModel) {
-                            viewModel.showConfirmation = false
-                            viewModel.currentParseIndex = 0
-                            viewModel.isParsing = true   // 立即显示 loading，避免等 Task 调度时闪白
-                            Task { await viewModel.parseNextPhoto() }
-                        }
-                    } else if viewModel.batchFinished {
-                        // 批量完成后，不显示 scanningView 的兜底加载态，
-                        // 让 alert 独占屏幕，避免用户困惑。
-                        Color.clear
-                    } else {
-                        scanningView
+            Group {
+                if viewModel.showConfirmation {
+                    ScanConfirmView(viewModel: viewModel) {
+                        viewModel.showConfirmation = false
+                        viewModel.currentParseIndex = 0
+                        viewModel.isParsing = true   // 立即显示 loading，避免等 Task 调度时闪白
+                        Task { await viewModel.parseNextPhoto() }
                     }
-                }
-                if isReparsing {
-                    reparsingOverlay
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                } else if viewModel.batchFinished {
+                    // 批量完成后，不显示 scanningView 的兜底加载态，
+                    // 让 alert 独占屏幕，避免用户困惑。
+                    Color.clear
+                } else {
+                    scanningView
                 }
             }
-            .navigationTitle("导入报告")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("取消") {
-                        viewModel.reset()
-                        dismiss()
-                    }
-                    .disabled(isReparsing || isMovingToShenji)
+            .overlay {
+                if isReparsing {
+                    reparsingOverlay
                 }
             }
             .onAppear {
@@ -89,55 +77,47 @@ struct PhotoScanView: View {
                 }
             }
             .onChange(of: viewModel.batchFinished) { _, finished in
+                LoggerService.shared.log("[PhotoScanView.onChange batchFinished] finished = \(finished), duplicateAssetIds.count = \(viewModel.duplicateAssetIds.count)")
                 guard finished else { return }
                 // 优先处理「重新识别」弹窗（有重复照片时）
                 if viewModel.duplicateAssetIds.isEmpty {
                     // 没有重复照片：直接弹出「移动到身记相册」确认
-                    viewModel.moveToShenjiAlbum = true
-                    viewModel.didAskMoveToShenji = true
+                    LoggerService.shared.log("[PhotoScanView.onChange batchFinished] 没有重复照片, 弹出身记相册确认")
                     showMoveToShenjiAlert = true
                 } else {
+                    LoggerService.shared.log("[PhotoScanView.onChange batchFinished] 有重复照片, 弹出重新识别确认")
                     showReparseDuplicatesConfirm = true
                 }
             }
             .alert("移动到「身记」相册？", isPresented: $showMoveToShenjiAlert) {
-                MoveToShenjiToggle(isOn: $viewModel.moveToShenjiAlbum)
-                Button("取消") {
+                Button("取消", role: .cancel) {
                     dismiss()
                 }
                 Button("移动并退出") {
-                    if viewModel.moveToShenjiAlbum {
-                        Task {
-                            LoggerService.shared.log("[PhotoScanView] 移动并退出, scannedPhotos.count = \(viewModel.scannedPhotos.count)")
-                            isMovingToShenji = true
-                            let count = await viewModel.moveDetectedPhotosToShenjiAlbum()
-                            LoggerService.shared.log("[PhotoScanView] 移动返回 count = \(count)")
-                            isMovingToShenji = false
-                            if count > 0 {
-                                showMoveToShenjiSuccess = true
-                                dismiss()
-                            } else {
-                                // 移动失败，直接退出
-                                dismiss()
-                            }
-                        }
-                    } else {
+                    // 点击非 cancel 按钮后，SwiftUI 会自动把 isPresented 置回 false，
+                    // 这里把移动 + 关闭流程交给 viewModel 持有的 Task，
+                    // 即使视图重新求值（@State 已用 .id 固定）也不会丢失。
+                    Task { @MainActor in
+                        LoggerService.shared.log("[PhotoScanView] 移动并退出, scannedPhotos.count = \(viewModel.scannedPhotos.count)")
+                        isMovingToShenji = true
+                        let count = await viewModel.moveDetectedPhotosToShenjiAlbum()
+                        LoggerService.shared.log("[PhotoScanView] 移动返回 count = \(count)")
+                        isMovingToShenji = false
+                        // 直接关闭整个导入 sheet（不再弹成功提示，避免与 dismiss 竞争）。
                         dismiss()
                     }
                 }
             } message: {
                 Text("本次扫描发现 \(viewModel.scannedPhotos.count) 张报告照片。是否将它们全部移动到「身记」相册中方便管理？如果该相册不存在，将自动创建。")
             }
-            .alert("已完成", isPresented: $showMoveToShenjiSuccess) {
-                Button("确定") { }
-            } message: {
-                Text("已将 \(viewModel.scannedPhotos.count) 张报告照片移动到「身记」相册。")
-            }
             .alert("重新识别已有报告？", isPresented: $showReparseDuplicatesConfirm) {
                 Button("跳过", role: .cancel) {
-                    dismiss()
+                    // 跳过重新识别后，仍然应该弹出身记相册移动确认
+                    showReparseDuplicatesConfirm = false
+                    showMoveToShenjiAlert = true
                 }
                 Button("重新识别") {
+                    showReparseDuplicatesConfirm = false
                     Task { await runBatchReparse() }
                 }
             } message: {
@@ -148,6 +128,17 @@ struct PhotoScanView: View {
                     BatchReparseBanner(summary: summary)
                         .padding(.top, 8)
                         .transition(.move(edge: .top).combined(with: .opacity))
+                }
+            }
+            .navigationTitle("导入报告")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") {
+                        viewModel.reset()
+                        dismiss()
+                    }
+                    .disabled(isReparsing || isMovingToShenji)
                 }
             }
         }
@@ -198,8 +189,6 @@ struct PhotoScanView: View {
         withAnimation { reparseSummary = nil }
 
         // 重新识别完成后，也弹出「移动到身记相册」确认
-        viewModel.moveToShenjiAlbum = true
-        viewModel.didAskMoveToShenji = true
         showMoveToShenjiAlert = true
     }
 
@@ -390,16 +379,5 @@ private struct BatchReparseBanner: View {
         .background(background, in: Capsule())
         .shadow(color: .black.opacity(0.15), radius: 6, y: 2)
         .accessibilityLabel(text)
-    }
-}
-
-// MARK: - 移动到「身记」相册 Toggle
-
-/// 包装 Toggle 以避免在 .alert 中直接使用导致编译器类型推断超时。
-internal struct MoveToShenjiToggle: View {
-    @Binding var isOn: Bool
-
-    var body: some View {
-        Toggle("扫描完成后自动移动", isOn: $isOn)
     }
 }

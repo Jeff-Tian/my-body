@@ -101,15 +101,22 @@ struct HomeView: View {
                     showSinglePhotoImport = true  // 每次选择都手动触发打开
                 }
             }
-            .fullScreenCover(isPresented: $showSinglePhotoImport) {
-                OnAppearBlock {
-                    viewModel.fetchRecords()
-                }
-                PhotoScanView(preloadedAsset: singlePhotoItem?.asset)
+            .fullScreenCover(item: $singlePhotoItem) { item in
+                // 注意：cover 内容必须是单一根视图。之前在 PhotoScanView 旁边放了一个
+                // OnAppearBlock 兄弟视图，导致 HomeView 因 SwiftData 变更重渲染时，
+                // ViewBuilder 的 TupleView 子节点被重新识别，从而把 PhotoScanView 连同
+                // 它的 @State viewModel 一起重建（batchFinished 被重置为 false），
+                // 表现为「重新识别」后弹窗被关闭、照片未移动。这里改为单一根视图，
+                // 并把 fetchRecords 放到关闭时（onDisappear）执行。
+                PhotoScanView(preloadedAsset: item.asset)
+                    // 用稳定的 asset id 固定视图身份，避免 HomeView body 重新求值时
+                    // SwiftUI 丢失 PhotoScanView 的 @State（包括 viewModel、弹窗布尔值），
+                    // 否则「移动并退出」后弹窗不消失、scannedPhotos 被重置导致相册为空。
+                    .id(item.id)
                     .onDisappear {
+                        viewModel.fetchRecords()
                         // 关闭时先重置布尔值，再延迟重置 pickedItem
                         // 延迟重置确保下次选择同一张照片时 onChange 能正常触发
-                        showSinglePhotoImport = false
                         singlePhotoItem = nil
                         // 延迟到下一个 runloop 再重置 pickedItem，避免与当前关闭流程冲突
                         Task {
@@ -119,11 +126,9 @@ struct HomeView: View {
                     }
             }
             .fullScreenCover(isPresented: $showImportSheet) {
-                OnAppearBlock {
-                    viewModel.fetchRecords()
-                }
                 PhotoScanView(preloadedAsset: importAsset)
                     .onDisappear {
+                        viewModel.fetchRecords()
                         importAsset = nil
                     }
             }
@@ -138,13 +143,4 @@ struct HomeView: View {
 private struct SinglePhotoItem: Identifiable {
     let asset: PHAsset
     var id: String { asset.localIdentifier }
-}
-
-/// A zero-size view that runs a side-effect on appear.
-/// Used to run non-View-returning code inside a SwiftUI view builder.
-private struct OnAppearBlock: View {
-    let action: () -> Void
-    var body: some View {
-        Color.clear.onAppear(perform: action)
-    }
 }

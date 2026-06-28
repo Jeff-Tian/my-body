@@ -36,15 +36,6 @@ final class ScanViewModel {
     /// 批量「重新识别」进度：总条数（即 `duplicateAssetIds.count` 启动快照）。
     var reparseTotal: Int = 0
 
-    // MARK: - 移动照片到「身记」相册
-
-    /// 扫描完成后，用户是否希望将检测到的报告照片移动到「身记」相册。
-    /// 默认 true（勾选），用户可反勾选。
-    var moveToShenjiAlbum = true
-
-    /// 是否已经弹出过「移动到身记相册」的确认对话框（防止重复弹出）。
-    var didAskMoveToShenji = false
-
     private let photoService = PhotoScanService()
     private let ocrService = OCRService()
     private var modelContext: ModelContext?
@@ -121,12 +112,17 @@ final class ScanViewModel {
         preloadedAsset = asset
         isBatchScanContext = false
 
+        LoggerService.shared.log("[ScanViewModel.startSingleImport] 开始加载缩略图")
         let thumb = await photoService.loadFullImage(for: asset)
+        LoggerService.shared.log("[ScanViewModel.startSingleImport] 缩略图加载完成, thumb != nil = \(thumb != nil)")
+        
         var photo = ScannedPhoto(asset: asset, thumbnail: thumb)
         photo.isSelected = true
         scannedPhotos = [photo]
         totalCount = 1
         showConfirmation = true
+        
+        LoggerService.shared.log("[ScanViewModel.startSingleImport] 完成, showConfirmation = \(showConfirmation), scannedPhotos.count = \(scannedPhotos.count)")
     }
 
     func toggleSelection(for photo: ScannedPhoto) {
@@ -140,8 +136,11 @@ final class ScanViewModel {
     }
 
     func parseNextPhoto() async {
+        LoggerService.shared.log("[ScanViewModel.parseNextPhoto] 被调用, selectedPhotos.count = \(selectedPhotos.count), currentParseIndex = \(currentParseIndex)")
+        
         let selected = selectedPhotos
         guard currentParseIndex < selected.count else {
+            LoggerService.shared.log("[ScanViewModel.parseNextPhoto] 没有更多照片需要处理, 调用 finishBatch")
             finishBatch()
             return
         }
@@ -272,11 +271,13 @@ final class ScanViewModel {
     /// 批量识别全部完成时调用：标记整条流水线（扫描→识别→保存）完成，
     /// 这样下次进入不会再续传，而是从头开始一次全新扫描。
     private func finishBatch() {
+        LoggerService.shared.log("[ScanViewModel.finishBatch] 被调用, isBatchScanContext = \(isBatchScanContext)")
         if isBatchScanContext {
             photoService.recordRecognitionCompleted()
         }
         batchFinished = true
         isParsing = false
+        LoggerService.shared.log("[ScanViewModel.finishBatch] 完成, batchFinished = \(batchFinished)")
     }
 
     func reset() {
@@ -451,13 +452,17 @@ final class ScanViewModel {
     /// - 完成后保留 `duplicateAssetIds` 不变，便于 UI 显示「X / Y 已更新」汇总。
     @MainActor
     func reparseDuplicateRecords() async -> (succeeded: Int, failed: Int, errors: [(assetId: String, error: Error)]) {
+        LoggerService.shared.log("[ScanViewModel.reparseDuplicateRecords] 被调用, duplicateAssetIds.count = \(duplicateAssetIds.count)")
         guard let context = modelContext else {
+            LoggerService.shared.log("[ScanViewModel.reparseDuplicateRecords] modelContext 为 nil")
             return (0, 0, [])
         }
 
         let ids = duplicateAssetIds
         reparseTotal = ids.count
         reparseIndex = 0
+        
+        LoggerService.shared.log("[ScanViewModel.reparseDuplicateRecords] ids = \(ids)")
 
         var succeeded = 0
         var failed = 0
@@ -512,11 +517,13 @@ final class ScanViewModel {
             return 0
         }
 
-        let assetIdentifiers = scannedPhotos.map { $0.asset.localIdentifier }
-        guard !assetIdentifiers.isEmpty else {
-            LoggerService.shared.log("[身记相册] 没有有效的 PHAsset localIdentifier")
+        let assets = scannedPhotos.map { $0.asset }
+        guard !assets.isEmpty else {
+            LoggerService.shared.log("[身记相册] 没有可移动的 PHAsset")
             return 0
         }
+
+        LoggerService.shared.log("[身记相册] 准备移动 \(assets.count) 张照片: \(assets.prefix(5).map { $0.localIdentifier })")
 
         let albumName = "身记"
 
@@ -526,16 +533,36 @@ final class ScanViewModel {
             return 0
         }
 
-        // 2) 将检测到的照片加入相册
+        let photoFetch = PHAsset.fetchAssets(in: collection, options: nil)
+        LoggerService.shared.log("[身记相册] 找到相册: \(collection.localizedTitle ?? "unknown"), 原有照片数: \(photoFetch.count)")
+
+        // 2) 将检测到的照片加入相册（必须传 PHAsset，不能传 localIdentifier 字符串）
         do {
             try await PHPhotoLibrary.shared().performChanges {
                 let request = PHAssetCollectionChangeRequest(for: collection)
-                request?.addAssets(NSArray(array: assetIdentifiers) as NSFastEnumeration)
+                request?.addAssets(assets as NSFastEnumeration)
             }
-            LoggerService.shared.log("[身记相册] 成功移动 \(assetIdentifiers.count) 张照片")
-            return assetIdentifiers.count
+            LoggerService.shared.log("[身记相册] 成功移动 \(assets.count) 张照片")
+            
+            // 验证：等待相册更新后检查照片数
+            try? await Task.sleep(nanoseconds: 500_000_000) // 500ms
+            let freshFetch = PHAssetCollection.fetchAssetCollections(
+                with: .album,
+                subtype: .any,
+                options: nil
+            )
+            for i in 0..<freshFetch.count {
+                let c = freshFetch.object(at: i) as PHAssetCollection
+                if c.localizedTitle == albumName {
+                    let newPhotoFetch = PHAsset.fetchAssets(in: c, options: nil)
+                    LoggerService.shared.log("[身记相册] 验证: 相册现在有 \(newPhotoFetch.count) 张照片")
+                    break
+                }
+            }
+            
+            return assets.count
         } catch {
-            LoggerService.shared.log("[身记相册] 移动照片失败: \(error)")
+            LoggerService.shared.log("[身记相册] 移动照片失败: \(error.localizedDescription)")
             return 0
         }
     }
