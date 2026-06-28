@@ -11,6 +11,7 @@ struct HomeView: View {
     @State private var pickedPHAsset: PHAsset?
     @State private var importAsset: PHAsset?  // 用于 fullScreenCover 的预加载资产
     @State private var showImportSheet = false  // 控制 fullScreenCover 显示
+    @State private var showSinglePhotoImport = false  // 驱动 fullScreenCover(isPresented:)，每次选择都触发
     @State private var singlePhotoItem: SinglePhotoItem?  // 单张照片导入的 PHAsset（包装为 Identifiable 以驱动 fullScreenCover(item:)）
 
     var body: some View {
@@ -89,22 +90,33 @@ struct HomeView: View {
             )
             .onChange(of: pickedItem) { _, newItem in
                 LoggerService.shared.log("[HomeView.onChange] pickedItem changed")
-                if let newItem, let id = newItem.itemIdentifier {
-                    let fetch = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil)
-                    if let asset = fetch.firstObject {
-                        LoggerService.shared.log("[HomeView.onChange] singlePhotoItem set to \(asset.localIdentifier), opening single photo import")
-                        singlePhotoItem = SinglePhotoItem(asset: asset)
-                    }
-                } else {
-                    LoggerService.shared.log("[HomeView.onChange] pickedItem is nil, clearing singlePhotoItem")
-                    singlePhotoItem = nil
+                guard let newItem, let id = newItem.itemIdentifier else {
+                    LoggerService.shared.log("[HomeView.onChange] pickedItem is nil, ignoring (user cancelled)")
+                    return
+                }
+                let fetch = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil)
+                if let asset = fetch.firstObject {
+                    LoggerService.shared.log("[HomeView.onChange] singlePhotoItem set to \(asset.localIdentifier), opening single photo import")
+                    singlePhotoItem = SinglePhotoItem(asset: asset)
+                    showSinglePhotoImport = true  // 每次选择都手动触发打开
                 }
             }
-            .fullScreenCover(item: $singlePhotoItem) { item in
+            .fullScreenCover(isPresented: $showSinglePhotoImport) {
                 OnAppearBlock {
                     viewModel.fetchRecords()
                 }
-                PhotoScanView(preloadedAsset: item.asset)
+                PhotoScanView(preloadedAsset: singlePhotoItem?.asset)
+                    .onDisappear {
+                        // 关闭时先重置布尔值，再延迟重置 pickedItem
+                        // 延迟重置确保下次选择同一张照片时 onChange 能正常触发
+                        showSinglePhotoImport = false
+                        singlePhotoItem = nil
+                        // 延迟到下一个 runloop 再重置 pickedItem，避免与当前关闭流程冲突
+                        Task {
+                            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 秒
+                            pickedItem = nil
+                        }
+                    }
             }
             .fullScreenCover(isPresented: $showImportSheet) {
                 OnAppearBlock {
